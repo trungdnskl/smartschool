@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Hệ thống phân tích mức độ tiếp nhận học tập - Phát hiện cảm xúc và hành vi thời gian thực">
+  <title>Classroom Engagement - Hệ thống phân tích lớp học</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎓</text></svg>">
+</head>
+<body>
+  <div class="app-container">
+    <!-- ===== Title Bar ===== -->
+    <header class="title-bar" id="titleBar">
+      <div class="title-bar-left">
+        <div class="title-bar-logo">
+          <span>🎓</span>
+        </div>
+        <div class="title-bar-text">
+          <h1>Classroom Engagement</h1>
+          <span class="title-subtitle" id="sessionStatus">Chưa bắt đầu buổi học</span>
+        </div>
+      </div>
+      <div class="title-bar-center">
+        <div class="session-timer" id="sessionTimer" style="display:none;">
+          <span class="timer-icon">⏱</span>
+          <span class="timer-value" id="timerValue">00:00:00</span>
+        </div>
+      </div>
+      <div class="title-bar-right">
+        <div class="connection-status" id="connectionStatus">
+          <span class="status-dot offline"></span>
+          <span>Offline</span>
+        </div>
+        <div class="user-avatar" title="Giáo viên">GV</div>
+      </div>
+    </header>
+
+    <!-- ===== Main Content ===== -->
+    <div class="main-content">
+      <!-- ===== Sidebar ===== -->
+      <nav class="sidebar" aria-label="Điều hướng">
+        <button class="sidebar-icon active" onclick="switchView('dashboard')" title="Tổng quan" id="nav-dashboard">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+          </svg>
+          <span class="sidebar-label">Tổng quan</span>
+        </button>
+        <button class="sidebar-icon" onclick="switchView('attendance')" title="Điểm danh" id="nav-attendance">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+          </svg>
+          <span class="sidebar-label">Điểm danh</span>
+        </button>
+        <button class="sidebar-icon" onclick="switchView('emotions')" title="Cảm xúc" id="nav-emotions">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/>
+            <line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>
+          </svg>
+          <span class="sidebar-label">Cảm xúc</span>
+        </button>
+        <button class="sidebar-icon" onclick="switchView('analytics')" title="Phân tích" id="nav-analytics">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+            <line x1="6" y1="20" x2="6" y2="14"/>
+          </svg>
+          <span class="sidebar-label">Phân tích</span>
+        </button>
+
+        <div class="sidebar-divider"></div>
+
+        <button class="sidebar-icon" onclick="switchView('cameras')" title="Camera" id="nav-cameras">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+          <span class="sidebar-label">Camera</span>
+        </button>
+        <button class="sidebar-icon" onclick="switchView('students')" title="Học sinh" id="nav-students">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          <span class="sidebar-label">Học sinh</span>
+        </button>
+        <button class="sidebar-icon" onclick="switchView('teachers')" title="Giáo viên" id="nav-teachers">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 14l9-5-9-5-9 5 9 5z"/>
+            <path d="M12 14l6.16-3.42a1 1 0 0 1 .84.18V17a6 6 0 0 1-12 0v-6.24a1 1 0 0 1 .84-.18L12 14z"/>
+          </svg>
+          <span class="sidebar-label">Giáo viên</span>
+        </button>
+        <button class="sidebar-icon" onclick="switchView('classes')" title="Lớp học" id="nav-classes">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+          <span class="sidebar-label">Lớp học</span>
+        </button>
+
+        <div class="sidebar-bottom">
+          <div class="sidebar-divider"></div>
+          <button class="sidebar-icon" onclick="switchView('settings')" title="Cài đặt" id="nav-settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+            <span class="sidebar-label">Cài đặt</span>
+          </button>
+        </div>
+      </nav>
+
+      <!-- ===== Content Area ===== -->
+      <main class="content-area" id="contentArea">
+        <!-- ===== DASHBOARD VIEW ===== -->
+        <div class="view active" id="view-dashboard">
+          <!-- Session Control Bar -->
+          <div class="session-control-bar">
+            <div class="session-inputs">
+              <select id="inputClass" class="session-input" onchange="onClassSelected()">
+                <option value="">-- Chọn lớp --</option>
+              </select>
+              <select id="inputSubject" class="session-input">
+                <option value="">-- Chọn môn --</option>
+              </select>
+              <select id="inputTeacher" class="session-input">
+                <option value="">-- Chọn GV --</option>
+              </select>
+            </div>
+            <button class="btn-session-start" id="btnSessionToggle" onclick="toggleSession()">
+              <span class="btn-icon">▶</span> Bắt đầu buổi học
+            </button>
+          </div>
+
+          <!-- Stats Cards -->
+          <div class="stats-row">
+            <div class="stat-card stat-engagement">
+              <div class="stat-card-icon">📊</div>
+              <div class="stat-card-body">
+                <span class="stat-card-value" id="statEngagement">0</span>
+                <span class="stat-card-unit">%</span>
+              </div>
+              <span class="stat-card-label">Mức tham gia</span>
+            </div>
+            <div class="stat-card stat-faces">
+              <div class="stat-card-icon">👤</div>
+              <div class="stat-card-body">
+                <span class="stat-card-value" id="statFaces">0</span>
+              </div>
+              <span class="stat-card-label">Khuôn mặt</span>
+            </div>
+            <div class="stat-card stat-present">
+              <div class="stat-card-icon">✅</div>
+              <div class="stat-card-body">
+                <span class="stat-card-value" id="statPresent">0</span>
+              </div>
+              <span class="stat-card-label">Có mặt</span>
+            </div>
+            <div class="stat-card stat-alerts">
+              <div class="stat-card-icon">🔔</div>
+              <div class="stat-card-body">
+                <span class="stat-card-value" id="statAlerts">0</span>
+              </div>
+              <span class="stat-card-label">Cảnh báo</span>
+            </div>
+          </div>
+
+          <!-- Main Dashboard Grid -->
+          <div class="dashboard-grid">
+            <!-- Engagement Gauge -->
+            <div class="card card-gauge">
+              <div class="card-header">
+                <h3>Chỉ số tham gia lớp</h3>
+                <span class="badge-live" id="liveBadge" style="display:none;">● TRỰC TIẾP</span>
+              </div>
+              <div class="gauge-container">
+                <canvas id="gaugeCanvas" width="280" height="180"></canvas>
+                <div class="gauge-value" id="gaugeValue">0%</div>
+                <div class="gauge-label" id="gaugeLabel">Chưa hoạt động</div>
+              </div>
+            </div>
+
+            <!-- Emotion Distribution -->
+            <div class="card card-emotions">
+              <div class="card-header">
+                <h3>Phân bố cảm xúc</h3>
+              </div>
+              <div class="emotion-grid" id="emotionGrid">
+                <div class="emotion-item" data-emotion="happy">
+                  <span class="emotion-emoji">😊</span>
+                  <span class="emotion-name">Vui vẻ</span>
+                  <div class="emotion-bar"><div class="emotion-bar-fill" id="bar-happy" style="width:0%"></div></div>
+                  <span class="emotion-count" id="count-happy">0</span>
+                </div>
+                <div class="emotion-item" data-emotion="neutral">
+                  <span class="emotion-emoji">😐</span>
+                  <span class="emotion-name">Bình thường</span>
+                  <div class="emotion-bar"><div class="emotion-bar-fill neutral" id="bar-neutral" style="width:0%"></div></div>
+                  <span class="emotion-count" id="count-neutral">0</span>
+                </div>
+                <div class="emotion-item" data-emotion="surprise">
+                  <span class="emotion-emoji">😲</span>
+                  <span class="emotion-name">Ngạc nhiên</span>
+                  <div class="emotion-bar"><div class="emotion-bar-fill surprise" id="bar-surprise" style="width:0%"></div></div>
+                  <span class="emotion-count" id="count-surprise">0</span>
+                </div>
+                <div class="emotion-item" data-emotion="sad">
+                  <span class="emotion-emoji">😢</span>
+                  <span class="emotion-name">Buồn</span>
+                  <div class="emotion-bar"><div class="emotion-bar-fill sad" id="bar-sad" style="width:0%"></div></div>
+                  <span class="emotion-count" id="count-sad">0</span>
+                </div>
+                <div class="emotion-item" data-emotion="angry">
+                  <span class="emotion-emoji">😠</span>
+                  <span class="emotion-name">Tức giận</span>
+                  <div class="emotion-bar"><div class="emotion-bar-fill angry" id="bar-angry" style="width:0%"></div></div>
+                  <span class="emotion-count" id="count-angry">0</span>
+                </div>
+                <div class="emotion-item" data-emotion="fear">
+                  <span class="emotion-emoji">😨</span>
+                  <span class="emotion-name">Sợ hãi</span>
+                  <div class="emotion-bar"><div class="emotion-bar-fill fear" id="bar-fear" style="width:0%"></div></div>
+                  <span class="emotion-count" id="count-fear">0</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Learning States -->
+            <div class="card card-learning-states">
+              <div class="card-header">
+                <h3>Trạng thái học tập</h3>
+              </div>
+              <div class="learning-states-grid" id="learningStatesGrid">
+                <div class="ls-item ls-engaged">
+                  <div class="ls-icon">🎯</div>
+                  <div class="ls-info">
+                    <span class="ls-label">Tích cực</span>
+                    <span class="ls-value" id="ls-engaged">0</span>
+                  </div>
+                </div>
+                <div class="ls-item ls-neutral">
+                  <div class="ls-icon">😐</div>
+                  <div class="ls-info">
+                    <span class="ls-label">Bình thường</span>
+                    <span class="ls-value" id="ls-neutral">0</span>
+                  </div>
+                </div>
+                <div class="ls-item ls-confused">
+                  <div class="ls-icon">🤔</div>
+                  <div class="ls-info">
+                    <span class="ls-label">Bối rối</span>
+                    <span class="ls-value" id="ls-confused">0</span>
+                  </div>
+                </div>
+                <div class="ls-item ls-bored">
+                  <div class="ls-icon">😴</div>
+                  <div class="ls-info">
+                    <span class="ls-label">Chán nản</span>
+                    <span class="ls-value" id="ls-bored">0</span>
+                  </div>
+                </div>
+                <div class="ls-item ls-frustrated">
+                  <div class="ls-icon">😤</div>
+                  <div class="ls-info">
+                    <span class="ls-label">Thất vọng</span>
+                    <span class="ls-value" id="ls-frustrated">0</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Engagement Timeline -->
+            <div class="card card-timeline">
+              <div class="card-header">
+                <h3>Biểu đồ engagement theo thời gian</h3>
+              </div>
+              <div class="timeline-chart-container">
+                <canvas id="timelineCanvas" width="800" height="200"></canvas>
+              </div>
+            </div>
+
+            <!-- Recent Alerts -->
+            <div class="card card-alerts">
+              <div class="card-header">
+                <h3>Cảnh báo gần đây</h3>
+              </div>
+              <div class="alerts-list" id="alertsList">
+                <div class="alert-empty">Chưa có cảnh báo</div>
+              </div>
+            </div>
+
+            <!-- Attention Distribution -->
+            <div class="card card-attention">
+              <div class="card-header">
+                <h3>Phân bố hướng nhìn</h3>
+              </div>
+              <div class="attention-grid" id="attentionGrid">
+                <div class="att-item">
+                  <div class="att-icon">👀</div>
+                  <span class="att-label">Nhìn bảng/GV</span>
+                  <span class="att-value" id="att-teacher">0</span>
+                </div>
+                <div class="att-item">
+                  <div class="att-icon">👈</div>
+                  <span class="att-label">Nhìn chỗ khác</span>
+                  <span class="att-value" id="att-away">0</span>
+                </div>
+                <div class="att-item">
+                  <div class="att-icon">📱</div>
+                  <span class="att-label">Cúi đầu</span>
+                  <span class="att-value" id="att-down">0</span>
+                </div>
+                <div class="att-item">
+                  <div class="att-icon">💤</div>
+                  <span class="att-label">Gục đầu</span>
+                  <span class="att-value" id="att-sleep">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ATTENDANCE VIEW ===== -->
+        <div class="view" id="view-attendance">
+          <div class="view-header">
+            <h2>📋 Điểm danh</h2>
+            <div class="attendance-summary" id="attendanceSummary">
+              <span class="att-stat present">Có mặt: <b id="attPresent">0</b></span>
+              <span class="att-stat late">Muộn: <b id="attLate">0</b></span>
+              <span class="att-stat absent">Vắng: <b id="attAbsent">0</b></span>
+            </div>
+          </div>
+          <div class="attendance-table-container">
+            <table class="attendance-table" id="attendanceTable">
+              <thead>
+                <tr>
+                  <th>STT</th>
+                  <th>Mã HS</th>
+                  <th>Họ tên</th>
+                  <th>Trạng thái</th>
+                  <th>Giờ vào</th>
+                </tr>
+              </thead>
+              <tbody id="attendanceBody">
+                <tr><td colspan="5" class="table-empty">Chưa có dữ liệu điểm danh</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ===== EMOTIONS VIEW ===== -->
+        <div class="view" id="view-emotions">
+          <div class="view-header">
+            <h2>😊 Phân tích cảm xúc chi tiết</h2>
+          </div>
+          <div class="emotions-detail-grid" id="emotionsDetailGrid">
+            <div class="card">
+              <div class="card-header"><h3>Biểu đồ cảm xúc tổng hợp</h3></div>
+              <canvas id="emotionPieCanvas" width="400" height="300"></canvas>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>Danh sách học sinh theo cảm xúc</h3></div>
+              <div class="student-emotion-list" id="studentEmotionList">
+                <div class="table-empty">Đang chờ dữ liệu...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ANALYTICS VIEW ===== -->
+        <div class="view" id="view-analytics">
+          <div class="view-header">
+            <h2>📊 Phân tích sau giờ học</h2>
+            <select class="session-select" id="analyticsSessionSelect" onchange="loadSessionAnalytics()">
+              <option value="">Chọn buổi học...</option>
+            </select>
+          </div>
+          <div class="analytics-grid" id="analyticsGrid">
+            <div class="card analytics-summary-card">
+              <div class="card-header"><h3>Tóm tắt buổi học</h3></div>
+              <div class="analytics-summary" id="analyticsSummary">
+                <div class="table-empty">Chọn buổi học để xem phân tích</div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>Biểu đồ engagement</h3></div>
+              <canvas id="analyticsTimelineCanvas" width="800" height="250"></canvas>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>Gợi ý cải thiện</h3></div>
+              <div class="recommendations-list" id="recommendationsList">
+                <div class="table-empty">Chưa có gợi ý</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== CAMERAS VIEW ===== -->
+        <div class="view" id="view-cameras">
+          <div class="view-header">
+            <h2>📹 Quản lý Camera</h2>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <button class="btn-sm" onclick="toggleLiveView()" id="btnLiveView">📺 LiveView</button>
+              <button class="btn-primary" onclick="showAddCameraForm()">+ Thêm Camera</button>
+            </div>
+          </div>
+
+          <!-- Camera Stats Bar -->
+          <div class="cam-stats-bar">
+            <div class="cam-stat-chip">
+              <span class="cam-stat-icon">📷</span>
+              <span>Tổng: <b id="camStatTotal">0</b></span>
+            </div>
+            <div class="cam-stat-chip cam-stat-online">
+              <span class="status-dot online"></span>
+              <span>Đang chạy: <b id="camStatOnline">0</b></span>
+            </div>
+            <div class="cam-stat-chip cam-stat-offline">
+              <span class="status-dot offline"></span>
+              <span>Dừng: <b id="camStatOffline">0</b></span>
+            </div>
+            <div class="cam-stat-chip cam-stat-error">
+              <span class="status-dot" style="background:var(--accent-warning)"></span>
+              <span>Lỗi: <b id="camStatError">0</b></span>
+            </div>
+            <button class="btn-sm" onclick="loadCameras()" style="margin-left:auto;">🔄 Làm mới</button>
+          </div>
+
+          <!-- ===== LIVE VIEW PANEL ===== -->
+          <div id="liveViewPanel" style="display:none;">
+            <div class="card" style="padding:0;overflow:hidden;">
+              <div class="card-header" style="padding:12px 16px;">
+                <h3>📺 Live View — Camera</h3>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <select id="liveViewCamSelect" class="session-select" onchange="switchLiveViewCam()" style="width:200px;font-size:13px;"></select>
+                  <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8899aa;">
+                    <input type="checkbox" id="liveOverlayToggle" checked onchange="switchLiveViewCam()"> AI Overlay
+                  </label>
+                  <button class="btn-sm" onclick="openFullscreen()" title="Toàn màn hình">⛶</button>
+                  <button class="modal-close" onclick="closeLiveView()">✕</button>
+                </div>
+              </div>
+              <div style="position:relative;background:#0a0e1a;min-height:360px;display:flex;align-items:center;justify-content:center;">
+                <img id="liveViewImg"
+                     src=""
+                     alt="Live stream"
+                     style="max-width:100%;max-height:60vh;display:block;object-fit:contain;"
+                     onerror="onStreamError(this)">
+                <div id="liveViewPlaceholder" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#556;">
+                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                  <span style="font-size:13px;">Chọn camera và bật để xem live</span>
+                </div>
+                <!-- HUD overlay -->
+                <div id="liveHud" style="display:none;position:absolute;top:8px;left:8px;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);border-radius:6px;padding:4px 10px;font-size:12px;color:#eee;font-family:'JetBrains Mono',monospace;">
+                  <span id="liveHudText">● LIVE</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Add Camera Form (hidden by default) -->
+          <div class="cam-add-form card" id="camAddForm" style="display:none;">
+            <div class="card-header">
+              <h3>➕ Thêm Camera mới</h3>
+              <button class="modal-close" onclick="hideAddCameraForm()">✕</button>
+            </div>
+            <div class="cam-form-grid">
+              <div class="form-group">
+                <label>ID Camera</label>
+                <input type="text" id="camNewId" placeholder="VD: cam_front" required>
+              </div>
+              <div class="form-group">
+                <label>Tên Camera</label>
+                <input type="text" id="camNewName" placeholder="VD: Camera trước bảng" required>
+              </div>
+              <div class="form-group cam-form-url">
+                <label>URL / Nguồn video</label>
+                <input type="text" id="camNewUrl" placeholder="VD: rtsp://admin:pass@192.168.1.100:554/stream1" required>
+              </div>
+              <div class="form-group">
+                <label>Loại nguồn</label>
+                <select id="camNewType" class="session-select" onchange="onCamTypeChange()">
+                  <option value="rtsp">📡 Camera IP (RTSP)</option>
+                  <option value="webcam">🖥️ Webcam USB</option>
+                  <option value="file">🎞️ File Video</option>
+                  <option value="http">🌐 HTTP Stream</option>
+                </select>
+              </div>
+            </div>
+            <!-- Quick URL Templates -->
+            <div class="cam-url-templates" id="camUrlTemplates">
+              <span class="cam-template-label">Mẫu nhanh:</span>
+              <button class="cam-template-btn" onclick="fillCamTemplate('hikvision')">Hikvision</button>
+              <button class="cam-template-btn" onclick="fillCamTemplate('dahua')">Dahua</button>
+              <button class="cam-template-btn" onclick="fillCamTemplate('kbvision')">KBVISION</button>
+              <button class="cam-template-btn" onclick="fillCamTemplate('tapo')">Tapo</button>
+              <button class="cam-template-btn" onclick="fillCamTemplate('ezviz')">EZVIZ</button>
+              <button class="cam-template-btn" onclick="fillCamTemplate('phone')">📱 Điện thoại</button>
+            </div>
+            <div class="cam-form-actions">
+              <button class="btn-sm" onclick="testCameraConnection()" id="btnTestCam">🔍 Kiểm tra kết nối</button>
+              <span class="cam-test-result" id="camTestResult"></span>
+              <button class="btn-primary" onclick="submitAddCamera()" style="margin-left:auto;">✅ Thêm Camera</button>
+            </div>
+          </div>
+
+          <!-- Camera Cards Grid -->
+          <div class="cameras-grid" id="camerasGrid">
+            <div class="table-empty">Đang tải danh sách camera...</div>
+          </div>
+
+          <!-- Camera Help -->
+          <div class="card cam-help-card">
+            <div class="card-header">
+              <h3>💡 Hướng dẫn kết nối Camera IP</h3>
+              <button class="btn-sm" onclick="toggleCamHelp()">Mở rộng</button>
+            </div>
+            <div class="cam-help-content" id="camHelpContent" style="display:none;">
+              <div class="cam-help-grid">
+                <div class="cam-help-item">
+                  <h4>📡 Camera IP (RTSP)</h4>
+                  <div class="cam-help-table">
+                    <div class="cam-help-row"><span>Hikvision</span><code>rtsp://admin:pass@IP:554/Streaming/Channels/102</code></div>
+                    <div class="cam-help-row"><span>Dahua</span><code>rtsp://admin:pass@IP:554/cam/realmonitor?channel=1&subtype=1</code></div>
+                    <div class="cam-help-row"><span>KBVISION</span><code>rtsp://admin:pass@IP:554/cam/realmonitor?channel=1&subtype=1</code></div>
+                    <div class="cam-help-row"><span>Tapo</span><code>rtsp://user:pass@IP:554/stream1</code></div>
+                    <div class="cam-help-row"><span>EZVIZ</span><code>rtsp://admin:pass@IP:554/h264/ch1/main/av_stream</code></div>
+                  </div>
+                </div>
+                <div class="cam-help-item">
+                  <h4>🖥️ Webcam & Khác</h4>
+                  <div class="cam-help-table">
+                    <div class="cam-help-row"><span>Webcam USB</span><code>0</code> (webcam đầu tiên)</div>
+                    <div class="cam-help-row"><span>Webcam thứ 2</span><code>1</code></div>
+                    <div class="cam-help-row"><span>File video</span><code>E:/videos/demo.mp4</code></div>
+                    <div class="cam-help-row"><span>📱 IP Webcam App</span><code>http://192.168.1.xxx:8080/video</code></div>
+                  </div>
+                </div>
+              </div>
+              <div class="cam-help-tips">
+                <p>⚡ <b>Mẹo:</b> Dùng sub-stream (subtype=1 hoặc Channels/102) để giảm tải CPU.</p>
+                <p>🔍 <b>Test URL:</b> Mở VLC → Media → Open Network Stream → Dán URL RTSP.</p>
+                <p>🌐 Đảm bảo camera và máy tính cùng mạng LAN (cùng dải IP 192.168.x.x).</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== STUDENTS VIEW ===== -->
+        <div class="view" id="view-students">
+          <div class="view-header">
+            <h2>👨‍🎓 Quản lý học sinh</h2>
+            <div class="view-header-actions">
+              <select id="filterStudentClass" class="session-input" onchange="loadStudents()" style="width:180px;margin-right:8px;">
+                <option value="">Tất cả lớp</option>
+              </select>
+              <button class="btn-secondary" onclick="document.getElementById('csvInput').click()">📥 Import CSV</button>
+              <input type="file" id="csvInput" accept=".csv" style="display:none" onchange="importCSV(this)">
+              <button class="btn-primary" onclick="showEnrollModal()">+ Đăng ký mới</button>
+            </div>
+          </div>
+          <div class="students-table-container">
+            <table class="attendance-table">
+              <thead>
+                <tr>
+                  <th>Mã HS</th>
+                  <th>Họ tên</th>
+                  <th>Lớp</th>
+                  <th>Ảnh ML</th>
+                  <th>Đồng ý PHHS</th>
+                  <th>Ngày đăng ký</th>
+                  <th>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody id="studentsBody">
+                <tr><td colspan="7" class="table-empty">Chưa có học sinh nào được đăng ký</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ===== TEACHERS VIEW ===== -->
+        <div class="view" id="view-teachers">
+          <div class="view-header">
+            <h2>👩‍🏫 Quản lý giáo viên</h2>
+            <button class="btn-primary" onclick="showTeacherModal()">+ Thêm giáo viên</button>
+          </div>
+          <div class="entity-cards" id="teacherCards">
+            <div class="table-empty" style="padding:40px;text-align:center;color:#8899aa;">Chưa có giáo viên nào</div>
+          </div>
+        </div>
+
+        <!-- ===== CLASSES VIEW ===== -->
+        <div class="view" id="view-classes">
+          <div class="view-header">
+            <h2>🏫 Quản lý lớp học</h2>
+            <button class="btn-primary" onclick="showClassModal()">+ Thêm lớp</button>
+          </div>
+          <div class="entity-cards" id="classCards">
+            <div class="table-empty" style="padding:40px;text-align:center;color:#8899aa;">Chưa có lớp nào</div>
+          </div>
+        </div>
+
+        <!-- ===== SETTINGS VIEW ===== -->
+        <div class="view" id="view-settings">
+          <div class="view-header">
+            <h2>⚙️ Cài đặt & Bảo mật</h2>
+          </div>
+          <div class="settings-grid">
+            <div class="card">
+              <div class="card-header"><h3>🔒 Quyền riêng tư</h3></div>
+              <div class="settings-list">
+                <div class="setting-item">
+                  <span>Lưu ảnh khuôn mặt</span>
+                  <span class="setting-value off">Tắt</span>
+                </div>
+                <div class="setting-item">
+                  <span>Mã hóa embedding</span>
+                  <span class="setting-value on">Bật</span>
+                </div>
+                <div class="setting-item">
+                  <span>Ẩn danh báo cáo</span>
+                  <span class="setting-value on">Bật</span>
+                </div>
+                <div class="setting-item">
+                  <span>Lưu trữ dữ liệu</span>
+                  <span class="setting-value">90 ngày</span>
+                </div>
+                <div class="setting-item">
+                  <span>Yêu cầu đồng ý PH</span>
+                  <span class="setting-value on">Bật</span>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>🧠 Mô hình AI</h3></div>
+              <div class="settings-list">
+                <div class="setting-item">
+                  <span>Face Detection</span>
+                  <span class="setting-value">OpenCV DNN (CPU)</span>
+                </div>
+                <div class="setting-item">
+                  <span>Emotion Recognition</span>
+                  <span class="setting-value">FER (CPU)</span>
+                </div>
+                <div class="setting-item">
+                  <span>Head Pose</span>
+                  <span class="setting-value">MediaPipe</span>
+                </div>
+                <div class="setting-item">
+                  <span>GPU</span>
+                  <span class="setting-value off">Không có</span>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h3>⚡ Hiệu suất</h3></div>
+              <div class="settings-list">
+                <div class="setting-item">
+                  <span>Tổng frames xử lý</span>
+                  <span class="setting-value" id="perfFrames">0</span>
+                </div>
+                <div class="setting-item">
+                  <span>Thời gian xử lý TB</span>
+                  <span class="setting-value" id="perfTime">0ms</span>
+                </div>
+                <div class="setting-item">
+                  <span>Faces đang theo dõi</span>
+                  <span class="setting-value" id="perfFaces">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ===== Enroll Modal ===== -->
+  <div class="modal-overlay" id="enrollModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Đăng ký học sinh mới</h3>
+        <button class="modal-close" onclick="closeEnrollModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="enrollForm" onsubmit="submitEnroll(event)">
+          <div class="form-group">
+            <label>Mã học sinh</label>
+            <input type="text" id="enrollId" required placeholder="VD: HS001">
+          </div>
+          <div class="form-group">
+            <label>Họ tên</label>
+            <input type="text" id="enrollName" required placeholder="VD: Nguyễn Văn A">
+          </div>
+          <div class="form-group">
+            <label>Lớp</label>
+            <select id="enrollClass">
+              <option value="">-- Chọn lớp --</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>SĐT Phụ huynh</label>
+            <input type="text" id="enrollParentPhone" placeholder="VD: 0912345678">
+          </div>
+          <div class="form-group">
+            <label>Ảnh khuôn mặt (tùy chọn)</label>
+            <input type="file" id="enrollPhoto" accept="image/*">
+          </div>
+          <button type="submit" class="btn-primary" style="width:100%;margin-top:12px;">Đăng ký</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Teacher Modal ===== -->
+  <div class="modal-overlay" id="teacherModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Thêm giáo viên</h3>
+        <button class="modal-close" onclick="closeModal('teacherModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="teacherForm" onsubmit="submitTeacher(event)">
+          <div class="form-group">
+            <label>Mã giáo viên</label>
+            <input type="text" id="teacherId" required placeholder="VD: GV001">
+          </div>
+          <div class="form-group">
+            <label>Họ tên</label>
+            <input type="text" id="teacherName" required placeholder="VD: Nguyễn Thị Mai">
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="teacherEmail" placeholder="mai@school.vn">
+          </div>
+          <div class="form-group">
+            <label>Số điện thoại</label>
+            <input type="text" id="teacherPhone" placeholder="0912345678">
+          </div>
+          <div class="form-group">
+            <label>Chuyên môn</label>
+            <input type="text" id="teacherSpecialty" placeholder="VD: Toán học">
+          </div>
+          <button type="submit" class="btn-primary" style="width:100%;margin-top:12px;">Thêm giáo viên</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Class Modal ===== -->
+  <div class="modal-overlay" id="classModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Thêm lớp học</h3>
+        <button class="modal-close" onclick="closeModal('classModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <form id="classForm" onsubmit="submitClass(event)">
+          <div class="form-group">
+            <label>Mã lớp</label>
+            <input type="text" id="classIdInput" required placeholder="VD: 10A1">
+          </div>
+          <div class="form-group">
+            <label>Tên lớp</label>
+            <input type="text" id="classNameInput" required placeholder="VD: Lớp 10A1">
+          </div>
+          <div class="form-group">
+            <label>Khối</label>
+            <input type="text" id="classGrade" placeholder="VD: 10">
+          </div>
+          <div class="form-group">
+            <label>Phòng học</label>
+            <input type="text" id="classRoom" placeholder="VD: STEM-101">
+          </div>
+          <div class="form-group">
+            <label>GV chủ nhiệm</label>
+            <select id="classTeacher">
+              <option value="">-- Chọn GV --</option>
+            </select>
+          </div>
+          <button type="submit" class="btn-primary" style="width:100%;margin-top:12px;">Thêm lớp</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Toast Container ===== -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ===== Scripts ===== -->
+  <script src="app.js"></script>
+</body>
+</html>

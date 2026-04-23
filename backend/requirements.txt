@@ -1,0 +1,68 @@
+# ========================================
+# Classroom Engagement Analysis System
+# Dependencies (CPU-optimized)
+# Updated: 2026-04 — HuggingFace + InsightFace upgrade
+# ========================================
+
+# ── Core Web Framework ────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+websockets==12.0
+
+# ── Computer Vision ───────────────────────────────────
+opencv-python-headless==4.9.0.80
+opencv-contrib-python-headless==4.9.0.80   # LBPH fallback
+mediapipe==0.10.14                          # head pose estimation
+Pillow>=10.3.0
+
+# ── Numerics ──────────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.12.0
+
+# ── Storage / Config ──────────────────────────────────
+aiosqlite==0.20.0
+pyyaml==6.0.1
+
+# ── ML / Scikit ───────────────────────────────────────
+scikit-learn>=1.4.2
+
+# ── JWT Auth ──────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# ── Rate Limiting ─────────────────────────────────────
+slowapi==0.1.9
+
+# ========================================
+# PRIMARY: InsightFace ONNX (Face Recognition)
+# Thay thế DeepFace — 3-5x nhanh hơn, không cần TensorFlow
+# Accuracy LFW: 99.7%, RAM: ~400MB
+# ========================================
+insightface>=0.7.3
+onnxruntime>=1.18.0               # CPU inference (không cần GPU)
+
+# ========================================
+# PRIMARY: HuggingFace Transformers (Emotion)
+# Thay thế FER library — accuracy ~93% vs ~70%
+# Model: dima806/facial_emotions_image_detection (27MB)
+# ========================================
+torch>=2.2.0                      # cài CPU: pip install torch --index-url https://download.pytorch.org/whl/cpu
+transformers>=4.40.0
+huggingface-hub>=0.22.0
+timm>=1.0.3                       # needed by some vision models
+
+# ========================================
+# FALLBACK: FER + DeepFace
+# Tự động kích hoạt nếu primary engines không có
+# ========================================
+fer==22.5.1                       # FER fallback emotion
+tensorflow-cpu==2.16.1            # required by FER & DeepFace
+# deepface>=0.0.90                # uncomment if using DeepFace fallback
+# tf-keras>=2.16.0                # companion to tensorflow for deepface
+
+# ========================================
+# OPTIONAL: HuggingFace Datasets
+# Dùng để test pipeline với sample data
+# ========================================
+# datasets>=2.18.0                # uncomment để tải sample datasets

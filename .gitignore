@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Models & Data (large files)
+models_cache/
+data/classroom.db
+data/face_embeddings/*/sample_*.png
+data/face_embeddings/*/sample_*.jpg
+*.pkl
+*.onnx
+*.pt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
