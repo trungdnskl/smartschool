@@ -1,21 +1,34 @@
-import { useEffect } from 'react'
+import { useEffect, Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Layout/Sidebar';
 import TitleBar from './components/Layout/TitleBar';
-import DashboardPage from './pages/Dashboard/DashboardPage';
-import CamerasPage from './pages/Cameras/CamerasPage';
-import StudentsPage from './pages/Students/StudentsPage';
-import TeachersPage from './pages/Teachers/TeachersPage';
-import ClassesPage from './pages/Classes/ClassesPage';
-import AttendancePage from './pages/Attendance/AttendancePage';
-import EmotionsPage from './pages/Emotions/EmotionsPage';
-import AnalyticsPage from './pages/Analytics/AnalyticsPage';
-import SettingsPage from './pages/Settings/SettingsPage';
-import LoginPage from './pages/Login/LoginPage';
 import { ToastProvider } from './components/UI/Toast';
 import { useWebSocket } from './hooks/useWebSocket';
 import useAuthStore from './store/authStore';
 import './App.css';
+
+// ── Lazy-loaded pages (tối ưu #1) ─────────────────────
+// Mỗi page thành chunk riêng, chỉ load khi navigate tới
+const DashboardPage = lazy(() => import('./pages/Dashboard/DashboardPage'));
+const CamerasPage = lazy(() => import('./pages/Cameras/CamerasPage'));
+const StudentsPage = lazy(() => import('./pages/Students/StudentsPage'));
+const TeachersPage = lazy(() => import('./pages/Teachers/TeachersPage'));
+const ClassesPage = lazy(() => import('./pages/Classes/ClassesPage'));
+const AttendancePage = lazy(() => import('./pages/Attendance/AttendancePage'));
+const EmotionsPage = lazy(() => import('./pages/Emotions/EmotionsPage'));
+const AnalyticsPage = lazy(() => import('./pages/Analytics/AnalyticsPage'));
+const SettingsPage = lazy(() => import('./pages/Settings/SettingsPage'));
+const LoginPage = lazy(() => import('./pages/Login/LoginPage'));
+
+/** Page loading fallback */
+function PageLoader() {
+  return (
+    <div className="page-loader">
+      <div className="page-loader-spinner" />
+      <p>Đang tải trang...</p>
+    </div>
+  );
+}
 
 /** Mount WebSocket globally so it stays alive across page navigations */
 function WebSocketProvider({ children }) {
@@ -59,7 +72,9 @@ function MainLayout({ children }) {
       <div className="main-content">
         <Sidebar />
         <div className="content-area page-enter">
-          {children}
+          <Suspense fallback={<PageLoader />}>
+            {children}
+          </Suspense>
         </div>
       </div>
     </div>
@@ -96,7 +111,11 @@ function App() {
     <ToastProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<LoginPage />} />
+          <Route path="/login" element={
+            <Suspense fallback={<PageLoader />}>
+              <LoginPage />
+            </Suspense>
+          } />
           <Route path="/*" element={<AuthenticatedApp />} />
         </Routes>
       </BrowserRouter>

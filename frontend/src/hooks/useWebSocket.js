@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import useAppStore from '../store/appStore'
 
 // In dev: connect directly to backend (Vite WS proxy may conflict with HMR)
@@ -6,25 +6,47 @@ import useAppStore from '../store/appStore'
 const WS_HOST = import.meta.env.DEV ? 'localhost:8001' : window.location.host
 const WS_URL = `ws://${WS_HOST}/ws`
 
+// ── Reconnect config ────────────────────────────────────
+const RECONNECT_BASE_MS = 1000   // Start at 1s
+const RECONNECT_MAX_MS = 30000   // Cap at 30s
+const PING_INTERVAL_MS = 25000
+
 export function useWebSocket() {
   const ws = useRef(null)
   const pingInterval = useRef(null)
   const reconnectTimeout = useRef(null)
-  const { setWsConnected, updateEngagement, addAlert, handleSessionStatus, startSession } = useAppStore()
+  const reconnectAttempt = useRef(0)
+  const isVisible = useRef(true)
 
-  const connect = () => {
+  // Narrow selectors to avoid unnecessary re-renders (tối ưu #2)
+  const setWsConnected = useAppStore(s => s.setWsConnected)
+  const updateEngagement = useAppStore(s => s.updateEngagement)
+  const addAlert = useAppStore(s => s.addAlert)
+  const handleSessionStatus = useAppStore(s => s.handleSessionStatus)
+  const startSession = useAppStore(s => s.startSession)
+
+  const connect = useCallback(() => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) return
+    // Don't reconnect if tab is hidden (tối ưu #3 — save bandwidth)
+    if (!isVisible.current) return
 
-    ws.current = new WebSocket(WS_URL)
+    try {
+      ws.current = new WebSocket(WS_URL)
+    } catch (e) {
+      console.error('[WS] Failed to create WebSocket:', e)
+      scheduleReconnect()
+      return
+    }
 
     ws.current.onopen = () => {
       setWsConnected(true)
+      reconnectAttempt.current = 0  // Reset backoff on success
       // Ping every 25s
       pingInterval.current = setInterval(() => {
         if (ws.current?.readyState === WebSocket.OPEN) {
           ws.current.send(JSON.stringify({ type: 'ping' }))
         }
-      }, 25000)
+      }, PING_INTERVAL_MS)
     }
 
     ws.current.onmessage = (event) => {
@@ -56,13 +78,35 @@ export function useWebSocket() {
     ws.current.onclose = () => {
       setWsConnected(false)
       clearInterval(pingInterval.current)
-      reconnectTimeout.current = setTimeout(connect, 3000)
+      scheduleReconnect()
     }
 
     ws.current.onerror = () => {
       setWsConnected(false)
     }
-  }
+  }, [setWsConnected, updateEngagement, addAlert, handleSessionStatus, startSession])
+
+  // Exponential backoff reconnect (tối ưu #3)
+  const scheduleReconnect = useCallback(() => {
+    clearTimeout(reconnectTimeout.current)
+    const attempt = reconnectAttempt.current++
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, attempt), RECONNECT_MAX_MS)
+    console.log(`[WS] Reconnect in ${delay}ms (attempt ${attempt + 1})`)
+    reconnectTimeout.current = setTimeout(connect, delay)
+  }, [connect])
+
+  // Visibility API — pause WS when tab hidden, resume when visible (tối ưu #3)
+  useEffect(() => {
+    const handleVisibility = () => {
+      isVisible.current = !document.hidden
+      if (!document.hidden && (!ws.current || ws.current.readyState !== WebSocket.OPEN)) {
+        reconnectAttempt.current = 0  // Reset backoff when user returns
+        connect()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [connect])
 
   useEffect(() => {
     connect()

@@ -25,5 +25,20 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // Tối ưu #9: Chunk splitting
+    sourcemap: false,  // Tắt sourcemap cho prod (giảm ~40% build size)
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Tách vendor chunks — cache riêng biệt
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-router': ['react-router-dom'],
+          'vendor-charts': ['recharts'],
+          'vendor-state': ['zustand'],
+        },
+      },
+    },
+    // Cảnh báo chunk > 300KB
+    chunkSizeWarningLimit: 300,
   },
 })
