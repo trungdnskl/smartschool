@@ -148,6 +148,45 @@ async def get_system_config():
     return d
 
 
+@router.get("/api/config/hot", summary="Get hot-reloadable params")
+async def get_hot_config():
+    """Trả về các parameters có thể thay đổi runtime."""
+    from config import get_hot_params
+    return {"params": get_hot_params()}
+
+
+@router.patch("/api/config/hot", summary="Update hot-reloadable params")
+async def update_hot_config(
+    updates: dict,
+    _: dict = Depends(require_teacher),
+):
+    """
+    Cập nhật threshold/tuning params mà KHÔNG cần restart.
+
+    Body example:
+    ```json
+    {
+        "detection": {"face_confidence": 0.6, "frame_skip": 4},
+        "engagement": {"alert_threshold": 35}
+    }
+    ```
+    """
+    from config import update_hot_params
+    changes = update_hot_params(updates)
+    if changes:
+        logger.info(f"[Config] Hot-reload applied: {changes}")
+    return {"status": "ok", "changes": changes}
+
+
+@router.post("/api/config/reload", summary="Reload config from file")
+async def reload_config_file(_: dict = Depends(require_teacher)):
+    """Re-read config.yaml và áp dụng hot-reloadable changes."""
+    from config import reload_config_from_file
+    result = reload_config_from_file()
+    logger.info(f"[Config] File reload result: {result}")
+    return {"status": "ok", "result": result}
+
+
 @router.get("/api/system/stats", summary="Thông tin hệ thống & tài nguyên")
 async def get_system_stats():
     """Trả về system stats (CPU, RAM, DB counts, cameras) cho Settings page."""

@@ -191,11 +191,119 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
 
 # Singleton config instance
 _config: Optional[AppConfig] = None
+_config_path: Optional[str] = None
+_config_mtime: float = 0.0  # Last modification time of config.yaml
 
 
 def get_config() -> AppConfig:
     """Get the singleton config instance."""
-    global _config
+    global _config, _config_path
     if _config is None:
         _config = load_config()
+        _config_path = str(BASE_DIR / "config.yaml")
     return _config
+
+
+# ── Hot-Reload Support ────────────────────────────────────────────────────────
+# Cho phép thay đổi runtime parameters mà không cần restart app.
+# Chỉ áp dụng cho các threshold/tuning params, KHÔNG thay đổi cấu trúc pipeline.
+
+# Danh sách các field cho phép hot-reload
+_HOT_RELOAD_FIELDS = {
+    "detection": ["face_confidence", "frame_skip", "emotion_update_interval", "max_faces"],
+    "engagement": ["alert_threshold", "confusion_alert_duration", "update_interval"],
+    "attendance": ["match_threshold", "deep_face_threshold", "check_interval"],
+}
+
+
+def get_hot_params() -> Dict[str, Dict[str, any]]:
+    """Get current hot-reloadable parameters."""
+    cfg = get_config()
+    result = {}
+    for section_name, fields in _HOT_RELOAD_FIELDS.items():
+        section = getattr(cfg, section_name)
+        result[section_name] = {f: getattr(section, f) for f in fields}
+    return result
+
+
+def update_hot_params(updates: Dict[str, Dict[str, any]]) -> Dict[str, any]:
+    """
+    Update hot-reloadable parameters at runtime.
+    Returns dict of changes applied.
+
+    Example:
+        update_hot_params({
+            "detection": {"face_confidence": 0.6, "frame_skip": 4},
+            "engagement": {"alert_threshold": 35}
+        })
+    """
+    cfg = get_config()
+    changes = {}
+
+    for section_name, field_updates in updates.items():
+        if section_name not in _HOT_RELOAD_FIELDS:
+            continue
+
+        section = getattr(cfg, section_name, None)
+        if section is None:
+            continue
+
+        allowed = _HOT_RELOAD_FIELDS[section_name]
+        for field_name, new_value in field_updates.items():
+            if field_name not in allowed:
+                continue
+
+            old_value = getattr(section, field_name, None)
+            if old_value == new_value:
+                continue
+
+            # Type coercion
+            field_type = type(old_value)
+            try:
+                coerced = field_type(new_value)
+                setattr(section, field_name, coerced)
+                changes[f"{section_name}.{field_name}"] = {
+                    "old": old_value,
+                    "new": coerced,
+                }
+            except (ValueError, TypeError) as e:
+                changes[f"{section_name}.{field_name}"] = {"error": str(e)}
+
+    return changes
+
+
+def reload_config_from_file() -> Dict[str, any]:
+    """
+    Re-read config.yaml and apply hot-reloadable changes.
+    Non-hot fields (cameras, server, database) are NOT changed.
+    Returns dict of changes applied.
+    """
+    global _config_mtime
+    path = str(BASE_DIR / "config.yaml")
+
+    if not os.path.exists(path):
+        return {"error": "config.yaml not found"}
+
+    # Check if file actually changed
+    mtime = os.path.getmtime(path)
+    if mtime == _config_mtime:
+        return {"status": "no_change"}
+    _config_mtime = mtime
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    updates = {}
+    for section_name, fields in _HOT_RELOAD_FIELDS.items():
+        if section_name in data:
+            section_data = data[section_name]
+            section_updates = {}
+            for f in fields:
+                if f in section_data:
+                    section_updates[f] = section_data[f]
+            if section_updates:
+                updates[section_name] = section_updates
+
+    if updates:
+        return update_hot_params(updates)
+    return {"status": "no_hot_changes"}

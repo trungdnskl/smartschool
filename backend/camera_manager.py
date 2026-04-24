@@ -2,6 +2,11 @@
 Classroom Engagement System - Camera Manager
 Quản lý kết nối RTSP đến camera IP trong lớp học
 Tái sử dụng và tối ưu từ ANPR Camera Manager
+
+Tối ưu v2:
+  - Exponential backoff reconnection (1s→2s→4s→...→60s)
+  - Adaptive frame skip (tự điều chỉnh theo CPU load)
+  - Processing time tracking
 """
 
 import cv2
@@ -10,6 +15,7 @@ import time
 import threading
 import queue
 import logging
+import math
 from typing import Dict, Optional, Callable, Any
 from datetime import datetime
 from config import CameraConfig
@@ -82,9 +88,16 @@ class CameraStream:
         self._fps_counter = 0
         self._fps_timer = time.time()
 
-        # Reconnect settings
-        self._reconnect_delay = 5
+        # Reconnect settings — Exponential backoff
+        self._reconnect_base_delay = 1.0    # Start at 1s
+        self._reconnect_max_delay = 60.0    # Max 60s
         self._max_reconnect_attempts = 50
+
+        # Adaptive frame skip
+        self._adaptive_frame_skip = frame_skip
+        self._last_process_time: float = 0.0  # ms
+        self._process_time_ema: float = 0.0   # Exponential moving average
+        self._adaptive_enabled = True
 
     def start(self):
         """Start camera stream capture in a background thread."""
@@ -198,6 +211,46 @@ class CameraStream:
                 self._capture = None
             return False
 
+    def _get_backoff_delay(self, attempt: int) -> float:
+        """
+        Exponential backoff: delay = base * 2^attempt, capped at max.
+        Ví dụ: 1s, 2s, 4s, 8s, 16s, 32s, 60s, 60s, ...
+        """
+        delay = self._reconnect_base_delay * (2 ** min(attempt - 1, 6))
+        return min(delay, self._reconnect_max_delay)
+
+    def _update_adaptive_skip(self, process_time_ms: float):
+        """
+        Adaptive frame skip: tự điều chỉnh dựa trên processing time.
+        - process_time < 50ms  → giảm skip (mượt hơn)
+        - process_time > 150ms → tăng skip (giảm load)
+        EMA smoothing để tránh thay đổi quá nhanh.
+        """
+        if not self._adaptive_enabled:
+            return
+
+        # Exponential Moving Average (alpha=0.3)
+        alpha = 0.3
+        self._process_time_ema = (
+            alpha * process_time_ms + (1 - alpha) * self._process_time_ema
+        )
+
+        ema = self._process_time_ema
+        old_skip = self._adaptive_frame_skip
+
+        if ema < 50 and self._adaptive_frame_skip > 2:
+            self._adaptive_frame_skip -= 1  # More frequent processing
+        elif ema > 150 and self._adaptive_frame_skip < 10:
+            self._adaptive_frame_skip += 1  # Less frequent processing
+        elif ema > 300 and self._adaptive_frame_skip < 15:
+            self._adaptive_frame_skip += 2  # Emergency skip increase
+
+        if old_skip != self._adaptive_frame_skip:
+            logger.debug(
+                f"[Camera {self.camera_id}] Adaptive skip: {old_skip}→{self._adaptive_frame_skip} "
+                f"(process_ema={ema:.0f}ms)"
+            )
+
     def _capture_loop(self):
         """Main loop for capturing frames from RTSP stream."""
         reconnect_attempts = 0
@@ -212,12 +265,14 @@ class CameraStream:
                     break
 
                 reconnect_attempts += 1
+                backoff = self._get_backoff_delay(reconnect_attempts)
                 logger.info(
-                    f"[Camera {self.camera_id}] Reconnect {reconnect_attempts}/{self._max_reconnect_attempts}"
+                    f"[Camera {self.camera_id}] Reconnect {reconnect_attempts}/{self._max_reconnect_attempts} "
+                    f"(backoff: {backoff:.1f}s)"
                 )
 
                 if not self._connect():
-                    time.sleep(self._reconnect_delay)
+                    time.sleep(backoff)
                     continue
 
                 reconnect_attempts = 0
@@ -245,14 +300,19 @@ class CameraStream:
                     self._fps_counter = 0
                     self._fps_timer = time.time()
 
-                # Skip frames for performance (CPU optimization)
-                if frame_index % self.frame_skip != 0:
+                # Adaptive frame skip (adjusts based on processing time)
+                current_skip = self._adaptive_frame_skip if self._adaptive_enabled else self.frame_skip
+                if frame_index % current_skip != 0:
                     continue
 
-                # Process frame via callback
+                # Process frame via callback + measure processing time
                 if self.on_frame:
                     try:
+                        t0 = time.perf_counter()
                         self.on_frame(self.camera_id, self.name, frame)
+                        process_ms = (time.perf_counter() - t0) * 1000
+                        self._last_process_time = process_ms
+                        self._update_adaptive_skip(process_ms)
                     except Exception as e:
                         logger.error(f"[Camera {self.camera_id}] Processing error: {e}")
 
@@ -289,7 +349,7 @@ class CameraStream:
             return None
 
     def get_info(self) -> Dict:
-        """Get camera information."""
+        """Get camera information with performance metrics."""
         return {
             "id": self.camera_id,
             "name": self.name,
@@ -300,6 +360,10 @@ class CameraStream:
             "last_frame_time": self.last_frame_time,
             "fps": self.fps,
             "error_message": self.error_message,
+            # Performance metrics
+            "process_time_ms": round(self._last_process_time, 1),
+            "adaptive_frame_skip": self._adaptive_frame_skip,
+            "process_time_ema_ms": round(self._process_time_ema, 1),
         }
 
 

@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
     if recovered:
         logger.warning(f"[Main] Recovered {recovered} stuck sessions from previous crash")
 
-    # ClassroomDetector
+    # ClassroomDetector — background initialization (non-blocking startup)
     state.detector = ClassroomDetector(
         face_model=cfg.detection.face_model,
         face_confidence=cfg.detection.face_confidence,
@@ -104,8 +104,10 @@ async def lifespan(app: FastAPI):
         attendance_check_interval=cfg.attendance.check_interval,
         late_threshold_minutes=cfg.attendance.late_threshold_minutes,
     )
+
+    # Load AI models in background thread (non-blocking event loop)
     try:
-        state.detector.initialize()
+        await asyncio.to_thread(state.detector.initialize)
         logger.info("[Main] AI models loaded ✓")
     except Exception as e:
         logger.warning(f"[Main] AI models failed ({e}) — running in API-only mode")
@@ -210,7 +212,13 @@ app.include_router(system_router)
 async def websocket_endpoint(ws: WebSocket):
     """Real-time engagement updates + heartbeat."""
     await ws.accept()
-    state.websocket_connections.add(ws)
+
+    # Thread-safe add with lock
+    if state._ws_lock:
+        async with state._ws_lock:
+            state.websocket_connections.add(ws)
+    else:
+        state.websocket_connections.add(ws)
     logger.info(f"[WS] Client connected (total: {len(state.websocket_connections)})")
 
     try:
@@ -256,7 +264,12 @@ async def websocket_endpoint(ws: WebSocket):
     except Exception as e:
         logger.error(f"[WS] Unexpected error: {e}")
     finally:
-        state.websocket_connections.discard(ws)
+        # Thread-safe remove with lock
+        if state._ws_lock:
+            async with state._ws_lock:
+                state.websocket_connections.discard(ws)
+        else:
+            state.websocket_connections.discard(ws)
         logger.info(f"[WS] Client disconnected (remaining: {len(state.websocket_connections)})")
 
 

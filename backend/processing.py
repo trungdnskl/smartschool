@@ -5,6 +5,11 @@ Tách từ main.py để:
   - Không có circular imports
   - main.py chỉ cần import on_frame_detected
   - Dễ test riêng lẻ
+
+Tối ưu v2:
+  - Async evidence capture (ThreadPoolExecutor — non-blocking disk I/O)
+  - Temporal smoothing cho engagement metrics
+  - Selective inference caching
 """
 import asyncio
 import cv2
@@ -12,10 +17,14 @@ import logging
 import os
 import time
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for non-blocking disk I/O (evidence capture)
+_io_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="evidence-io")
 
 # ── Evidence capture ──────────────────────────────────────
 
@@ -265,12 +274,22 @@ async def _store_and_broadcast(snapshot: Dict[str, Any], raw_frame: Optional[np.
 
     try:
         # Always broadcast to WebSocket (even without active session)
+        # Apply temporal smoothing for smoother UI updates
+        smoothed_engagement = state.smoother.smooth(
+            "avg_engagement", snapshot.get("avg_engagement", 0)
+        )
+        smoothed_faces = state.smoother.smooth(
+            "total_faces", snapshot.get("total_faces", 0)
+        )
+
         await state.broadcast({
             "type": "engagement_update",
             "data": {
                 "timestamp": snapshot.get("timestamp", ""),
-                "total_faces": snapshot.get("total_faces", 0),
-                "avg_engagement": snapshot.get("avg_engagement", 0),
+                "total_faces": round(smoothed_faces),
+                "total_faces_raw": snapshot.get("total_faces", 0),
+                "avg_engagement": round(smoothed_engagement, 1),
+                "avg_engagement_raw": snapshot.get("avg_engagement", 0),
                 "emotion_distribution": snapshot.get("emotion_distribution", {}),
                 "learning_state_distribution": snapshot.get("learning_state_distribution", {}),
                 "attention_distribution": snapshot.get("attention_distribution", {}),
@@ -313,14 +332,18 @@ async def _store_and_broadcast(snapshot: Dict[str, Any], raw_frame: Optional[np.
                         "arrival_time": record.get("arrival_time"),
                     })
 
-        # 3. Alerts + Evidence capture
+        # 3. Alerts + Evidence capture (async disk I/O)
         for alert in snapshot.get("alerts", []):
             alert_copy = dict(alert)
             alert_copy["session_id"] = session_id
 
-            # Capture evidence frame if we have a raw frame
+            # Capture evidence frame via ThreadPoolExecutor (non-blocking)
             if raw_frame is not None:
-                evidence_path = _capture_evidence(raw_frame, alert, session_id, snapshot)
+                loop = asyncio.get_event_loop()
+                evidence_path = await loop.run_in_executor(
+                    _io_executor,
+                    _capture_evidence, raw_frame, alert, session_id, snapshot
+                )
                 if evidence_path:
                     alert_copy["evidence_path"] = evidence_path
 
