@@ -92,7 +92,7 @@ cameras:
 
 detection:
   face_model: "opencv_dnn"       # opencv_dnn (CPU fast) | mediapipe | retinaface
-  face_confidence: 0.35
+  face_confidence: 0.5
   emotion_model: "fer"           # fer | deepface
   emotion_update_interval: 2.0   # seconds between emotion updates
   head_pose_enabled: true

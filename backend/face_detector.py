@@ -26,6 +26,14 @@ class FaceDetector:
     - 3x3 tiled detection: catches small faces in wide-angle 1080p streams
     """
 
+    # ── False-positive filters ────────────────────────
+    MIN_FACE_PX = 40          # minimum face width/height in pixels
+    MAX_ASPECT_RATIO = 1.8    # max width/height ratio (face ≈ square)
+    MIN_ASPECT_RATIO = 0.55   # min width/height ratio
+    # Minimum face size as fraction of frame diagonal
+    # e.g. 0.02 means face must be ≥ 2% of frame diagonal
+    MIN_FACE_FRAME_RATIO = 0.018
+
     def __init__(
         self,
         model_type: str = "opencv_dnn",
@@ -46,6 +54,9 @@ class FaceDetector:
         self._next_face_id = 1
         self._tracked_faces: Dict[int, Dict] = {}
         self._iou_threshold = 0.3
+
+        # Frame dimensions (updated each detect call)
+        self._frame_diag = 1000.0
 
     def initialize(self):
         """Initialize face detection — try MediaPipe first, then OpenCV DNN."""
@@ -136,6 +147,31 @@ class FaceDetector:
     # Detection methods
     # ─────────────────────────────────────────────────
 
+    def _validate_face(self, bbox: List[int]) -> bool:
+        """
+        Validate that a detection looks like a real face.
+        Rejects false positives from posters, signs, objects on walls.
+        """
+        x1, y1, x2, y2 = bbox
+        w = x2 - x1
+        h = y2 - y1
+
+        # 1. Minimum absolute size
+        if w < self.MIN_FACE_PX or h < self.MIN_FACE_PX:
+            return False
+
+        # 2. Aspect ratio check — face should be roughly square
+        aspect = w / max(h, 1)
+        if aspect > self.MAX_ASPECT_RATIO or aspect < self.MIN_ASPECT_RATIO:
+            return False
+
+        # 3. Minimum relative size — face must be meaningful vs frame
+        face_diag = (w**2 + h**2) ** 0.5
+        if face_diag / self._frame_diag < self.MIN_FACE_FRAME_RATIO:
+            return False
+
+        return True
+
     def detect_faces(self, frame: np.ndarray) -> List[Dict[str, Any]]:
         """
         Detect faces using multi-scale tiled approach.
@@ -143,6 +179,10 @@ class FaceDetector:
         """
         if not self._initialized:
             self.initialize()
+
+        # Cache frame diagonal for relative size checks
+        fh, fw = frame.shape[:2]
+        self._frame_diag = (fw**2 + fh**2) ** 0.5
 
         if self._use_mediapipe:
             raw = self._detect_mediapipe_multiscale(frame)
@@ -153,7 +193,16 @@ class FaceDetector:
         else:
             raw = []
 
-        return self._track_faces(raw)
+        # Apply validation filter to ALL detections
+        validated = [f for f in raw if self._validate_face(f["bbox"])]
+
+        if len(raw) != len(validated):
+            logger.debug(
+                f"[FaceDetector] Filtered {len(raw) - len(validated)} false positives "
+                f"({len(raw)} raw → {len(validated)} valid)"
+            )
+
+        return self._track_faces(validated)
 
     # ── MediaPipe detection ──────────────────────────
 
@@ -175,7 +224,7 @@ class FaceDetector:
             x2 = min(w, bb.origin_x + bb.width) + ox
             y2 = min(h, bb.origin_y + bb.height) + oy
 
-            if (x2 - x1) < 15 or (y2 - y1) < 15:
+            if (x2 - x1) < self.MIN_FACE_PX or (y2 - y1) < self.MIN_FACE_PX:
                 continue
 
             conf = det.categories[0].score if det.categories else 0.5
@@ -242,7 +291,7 @@ class FaceDetector:
             x1, y1, x2, y2 = box.astype(int)
             x1 += ox; y1 += oy; x2 += ox; y2 += oy
 
-            if (x2 - x1) < 20 or (y2 - y1) < 20:
+            if (x2 - x1) < self.MIN_FACE_PX or (y2 - y1) < self.MIN_FACE_PX:
                 continue
 
             faces.append({

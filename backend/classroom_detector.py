@@ -21,23 +21,36 @@ from engagement_engine import EngagementEngine
 logger = logging.getLogger(__name__)
 
 
+import cv2
+import numpy as np
+import logging
+import time
+import threading
+import concurrent.futures
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+
+from face_detector import FaceDetector
+from person_detector import PersonDetector
+from emotion_recognizer import EmotionRecognizer
+from head_pose_estimator import HeadPoseEstimator
+from attendance_tracker import AttendanceTracker
+from engagement_engine import EngagementEngine
+
+logger = logging.getLogger(__name__)
+
+
 class ClassroomDetector:
     """
-    Master pipeline kết hợp:
-    1. Face Detection
-    2. Emotion Recognition
-    3. Head Pose Estimation
-    4. Attendance Tracking
-    5. Engagement Scoring
-
-    Tối ưu cho CPU: xử lý tuần tự, sử dụng caching.
+    Master pipeline optimized for real-time responsiveness.
+    Uses a background worker pool for heavy AI analysis (Emotion, Recognition).
     """
 
     def __init__(
         self,
         face_model: str = "opencv_dnn",
         face_confidence: float = 0.35,
-        emotion_model: str = "auto",  # "auto" → HuggingFace → FER → rules
+        emotion_model: str = "auto",
         emotion_update_interval: float = 2.0,
         head_pose_enabled: bool = True,
         max_faces: int = 40,
@@ -45,7 +58,7 @@ class ClassroomDetector:
         alert_threshold: int = 40,
         confusion_alert_duration: int = 120,
         match_threshold: float = 0.6,
-        deep_face_threshold: float = 0.45,  # ISSUE-06: separate threshold for deep engines
+        deep_face_threshold: float = 0.45,
         attendance_check_interval: int = 3,
         late_threshold_minutes: int = 10,
     ):
@@ -56,10 +69,9 @@ class ClassroomDetector:
             max_faces=max_faces,
         )
 
-        # YOLOv8 person detector for accurate headcount
         self.person_detector = PersonDetector(
             confidence=0.25,
-            model_size="n",  # nano = fastest
+            model_size="n",
             max_persons=50,
         )
 
@@ -90,54 +102,62 @@ class ClassroomDetector:
         self._frame_count = 0
         self._last_process_time = 0
         self._avg_process_time = 0
-        self._last_person_count = 0
+        
+        # --- Async Analysis State ---
+        # Cache for heavy analysis results (persisted across frames using FaceID)
+        self._face_analysis_cache: Dict[int, Dict[str, Any]] = {}
+        # Track active background tasks to avoid redundant processing
+        self._active_tasks: Dict[int, concurrent.futures.Future] = {}
+        # Thread pool for heavy AI workers (Emotion, Recognition)
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="AIWorker")
 
-        # ── Multi-camera fusion ───────────────────────────
-        # Mỗi camera lưu partial result riêng, merge trước khi tính engagement
+        # --- Multi-camera fusion ---
         self._camera_results: Dict[str, Dict[str, Any]] = {}
         self._camera_timestamps: Dict[str, float] = {}
-        self._camera_stale_timeout = 5.0  # seconds — bỏ qua cam nếu > 5s không gửi frame
+        self._camera_stale_timeout = 5.0
 
     def initialize(self):
         """Initialize all AI modules."""
         if self._initialized:
             return
 
-        logger.info("[ClassroomDetector] Initializing AI modules...")
+        logger.info("[ClassroomDetector] Initializing AI modules (Master Mode)...")
 
-        try:
-            self.face_detector.initialize()
-            logger.info("[ClassroomDetector] ✓ Face Detector")
-        except Exception as e:
-            logger.error(f"[ClassroomDetector] ✗ Face Detector: {e}")
-            raise
-
+        self.face_detector.initialize()
         try:
             self.person_detector.initialize()
-            logger.info("[ClassroomDetector] ✓ Person Detector (YOLOv8)")
         except Exception as e:
-            logger.warning(f"[ClassroomDetector] ✗ Person Detector: {e}")
-
-        try:
-            self.emotion_recognizer.initialize()
-            logger.info("[ClassroomDetector] ✓ Emotion Recognizer")
-        except Exception as e:
-            logger.warning(f"[ClassroomDetector] ✗ Emotion Recognizer: {e}")
-
-        try:
-            self.head_pose_estimator.initialize()
-            logger.info("[ClassroomDetector] ✓ Head Pose Estimator")
-        except Exception as e:
-            logger.warning(f"[ClassroomDetector] ✗ Head Pose Estimator: {e}")
-
-        try:
-            self.attendance_tracker.initialize()
-            logger.info("[ClassroomDetector] ✓ Attendance Tracker")
-        except Exception as e:
-            logger.warning(f"[ClassroomDetector] ✗ Attendance Tracker: {e}")
+            logger.warning(f"Person detector init failed: {e}")
+            
+        self.emotion_recognizer.initialize()
+        self.head_pose_estimator.initialize()
+        self.attendance_tracker.initialize()
 
         self._initialized = True
         logger.info("[ClassroomDetector] All modules initialized ✓")
+
+    def _analyze_face_async(self, face_id: int, face_crop: np.ndarray):
+        """Background worker function for heavy face analysis."""
+        try:
+            # 1. Emotion Recognition (Heavy)
+            emotion = self.emotion_recognizer.recognize_emotion(face_crop, face_id)
+            
+            # 2. Attendance/Recognition Matching (Heavy)
+            self.attendance_tracker.check_attendance(face_id, face_crop)
+            
+            # 3. Pull latest student info
+            student_name = self.attendance_tracker.get_student_name(face_id)
+            student_id = self.attendance_tracker.get_student_id_for_face(face_id)
+            
+            return {
+                "emotion": emotion,
+                "student_name": student_name,
+                "student_id": student_id,
+                "last_update": time.time()
+            }
+        except Exception as e:
+            logger.error(f"[AIWorker] Async analysis failed for face {face_id}: {e}")
+            return None
 
     def process_frame(
         self,
@@ -146,63 +166,35 @@ class ClassroomDetector:
         frame: np.ndarray,
     ) -> Optional[Dict[str, Any]]:
         """
-        Full processing pipeline for a single video frame.
-
-        Steps:
-        1. Detect faces
-        2. For each face: emotion + head pose + attendance
-        3. Calculate engagement scores
-        4. Generate alerts
-        5. Return classroom snapshot
+        Responsive frame processing pipeline.
+        
+        1. Fast Detection (Faces + Persons)
+        2. Fast Analysis (Head Pose)
+        3. Async Heavy Analysis (Emotion + Identity)
+        4. Calculation based on Cached/Recent results
         """
         if not self._initialized:
             self.initialize()
 
-        # ISSUE-05 fix: Use lock instead of bare boolean for thread safety
         if not self._processing_lock.acquire(blocking=False):
-            return None  # Skip if still processing previous frame
+            return None
 
         start_time = time.time()
 
         try:
-            # Step 0: Person detection (YOLOv8) for headcount
+            # ── 1. Fast Detection ───────────────────────────
+            # Person detection (YOLOv8)
             persons = []
-            # Lazy init: if failed during startup, try again now
-            if not self.person_detector._initialized:
-                try:
-                    self.person_detector.initialize()
-                    logger.info("[ClassroomDetector] ✓ Person Detector (YOLOv8) — lazy init")
-                except Exception as e:
-                    logger.warning(f"[ClassroomDetector] PersonDetector lazy init failed: {e}")
-
             if self.person_detector._initialized:
-                try:
-                    persons = self.person_detector.detect(frame)
-                    self._last_person_count = len(persons)
-                except Exception as e:
-                    logger.debug(f"[ClassroomDetector] Person detect error: {e}")
+                persons = self.person_detector.detect(frame)
 
-            # Step 1: Detect faces
+            # Face detection (MediaPipe/DNN)
             faces = self.face_detector.detect_faces(frame)
 
             if not faces:
-                return {
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "camera_id": camera_id,
-                    "camera_name": camera_name,
-                    "total_faces": 0,
-                    "total_persons": len(persons),
-                    "persons": [{"person_id": p["person_id"], "bbox": p["bbox"], "confidence": p["confidence"]} for p in persons],
-                    "avg_engagement": 0,
-                    "students": [],
-                    "emotion_distribution": {},
-                    "learning_state_distribution": {},
-                    "attention_distribution": {},
-                    "alerts": [],
-                    "process_time_ms": 0,
-                }
+                return self._generate_empty_snapshot(camera_id, camera_name, persons)
 
-            # Step 2: Process each face
+            # ── 2. Analysis Dispatch ────────────────────────
             emotion_results = []
             head_pose_results = []
             active_face_ids = set()
@@ -212,32 +204,43 @@ class ClassroomDetector:
                 bbox = face["bbox"]
                 active_face_ids.add(face_id)
 
-                # Crop face for emotion recognition
-                face_crop = self.face_detector.crop_face(frame, bbox, margin=0.1)
-
-                # 2a. Emotion Recognition
-                if face_crop is not None:
-                    emotion = self.emotion_recognizer.recognize_emotion(face_crop, face_id)
-                    if emotion:
-                        # Add student info if known
-                        student_name = self.attendance_tracker.get_student_name(face_id)
-                        student_id = self.attendance_tracker.get_student_id_for_face(face_id)
-                        if student_name:
-                            emotion["student_name"] = student_name
-                            emotion["student_id"] = student_id
-                        emotion_results.append(emotion)
-
-                # 2b. Head Pose Estimation
+                # 2a. Fast: Head Pose Estimation
                 head_pose = self.head_pose_estimator.estimate_pose(frame, bbox, face_id)
                 if head_pose:
                     head_pose_results.append(head_pose)
 
-                # 2c. Attendance Check (less frequently)
-                if face_crop is not None:
-                    self.attendance_tracker.check_attendance(face_id, face_crop)
+                # 2b. Check Async Heavy Tasks (Emotion/Recognition)
+                # If a background task is done, update cache
+                if face_id in self._active_tasks:
+                    future = self._active_tasks[face_id]
+                    if future.done():
+                        res = future.result()
+                        if res:
+                            self._face_analysis_cache[face_id] = res
+                        del self._active_tasks[face_id]
 
-            # ── Multi-camera merge ────────────────────────
-            # Lưu partial result của camera này
+                # Dispatch new task if enough time passed and not currently running
+                last_upd = self._face_analysis_cache.get(face_id, {}).get("last_update", 0)
+                should_update = (time.time() - last_upd) > self.emotion_recognizer.update_interval
+                
+                if should_update and face_id not in self._active_tasks:
+                    face_crop = self.face_detector.crop_face(frame, bbox, margin=0.1)
+                    if face_crop is not None:
+                        self._active_tasks[face_id] = self._executor.submit(
+                            self._analyze_face_async, face_id, face_crop
+                        )
+
+                # Use cached data for current frame analysis
+                cached = self._face_analysis_cache.get(face_id)
+                if cached and cached.get("emotion"):
+                    emo_res = dict(cached["emotion"])
+                    # Inject student identity if found
+                    if cached.get("student_name"):
+                        emo_res["student_name"] = cached["student_name"]
+                        emo_res["student_id"] = cached["student_id"]
+                    emotion_results.append(emo_res)
+
+            # ── 3. Multi-camera Merge ───────────────────────
             partial = {
                 "emotion_results": emotion_results,
                 "head_pose_results": head_pose_results,
@@ -248,74 +251,70 @@ class ClassroomDetector:
             self._camera_results[camera_id] = partial
             self._camera_timestamps[camera_id] = time.time()
 
-            # Merge tất cả camera còn active (< stale_timeout)
             merged = self._merge_camera_results()
 
-            # Step 3: Calculate engagement từ merged data
+            # ── 4. Engagement Calculation ───────────────────
             snapshot = self.engagement_engine.calculate_engagement(
                 merged["emotion_results"],
                 merged["head_pose_results"],
                 total_faces=merged["total_faces"],
             )
 
-            # Add camera info + person count
-            snapshot["camera_id"] = camera_id
-            snapshot["camera_name"] = camera_name
-            snapshot["total_persons"] = merged["total_persons"]
-            snapshot["persons"] = merged["persons_list"]
-            snapshot["active_cameras"] = merged["active_cameras"]
+            # Enrich snapshot
+            snapshot.update({
+                "camera_id": camera_id,
+                "camera_name": camera_name,
+                "total_persons": merged["total_persons"],
+                "persons": merged["persons_list"],
+                "active_cameras": merged["active_cameras"],
+            })
 
-            # Fix: ensure attention_distribution counts ALL detected head poses
-            if merged["head_pose_results"]:
-                att_dist = {}
-                for hp in merged["head_pose_results"]:
-                    ad = hp.get("attention_direction", "looking_at_teacher")
-                    att_dist[ad] = att_dist.get(ad, 0) + 1
-                engine_att = snapshot.get("attention_distribution", {})
-                if not engine_att:
-                    snapshot["attention_distribution"] = att_dist
+            # Cleanup stale caches
+            self._cleanup_stale_cache(merged["all_active_face_ids"])
 
-            # Cleanup stale data
-            self.emotion_recognizer.cleanup_stale(merged["all_active_face_ids"])
-            self.head_pose_estimator.cleanup_stale(merged["all_active_face_ids"])
-
-            # Performance tracking
+            # Stats
             process_time = (time.time() - start_time) * 1000
             self._frame_count += 1
-            self._avg_process_time = (
-                self._avg_process_time * 0.9 + process_time * 0.1
-            )
+            self._avg_process_time = self._avg_process_time * 0.9 + process_time * 0.1
             snapshot["process_time_ms"] = round(process_time, 1)
-
-            if self._frame_count % 50 == 0:
-                logger.info(
-                    f"[ClassroomDetector] Frame #{self._frame_count} | "
-                    f"Cams: {merged['active_cameras']} | "
-                    f"People: {merged['total_persons']} | Faces: {merged['total_faces']} | "
-                    f"Engagement: {snapshot.get('avg_engagement', 0):.0f}% | "
-                    f"Time: {process_time:.0f}ms (avg: {self._avg_process_time:.0f}ms)"
-                )
 
             return snapshot
 
         except Exception as e:
-            logger.error(f"[ClassroomDetector] Processing error: {e}")
+            logger.error(f"[ClassroomDetector] Pipeline error: {e}", exc_info=True)
             return None
-
         finally:
             self._processing_lock.release()
 
-    def _merge_camera_results(self) -> Dict[str, Any]:
-        """
-        Merge partial results from all active cameras.
+    def _generate_empty_snapshot(self, camera_id, camera_name, persons):
+        return {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "camera_id": camera_id,
+            "camera_name": camera_name,
+            "total_faces": 0,
+            "total_persons": len(persons),
+            "persons": [{"person_id": p["person_id"], "bbox": p["bbox"]} for p in persons],
+            "avg_engagement": 0,
+            "students": [],
+            "emotion_distribution": {},
+            "learning_state_distribution": {},
+            "attention_distribution": {},
+            "alerts": [],
+            "process_time_ms": 0,
+        }
 
-        Nguyên lý 1 lớp = 2 camera (trước + sau):
-        - Face IDs từ mỗi camera được offset để không trùng
-          (cam_front: face 0-99, cam_rear: face 100-199)
-        - Person counts KHÔNG cộng dồn (tránh đếm trùng)
-          → lấy max(cam_front, cam_rear) làm sĩ số ước tính
-        - Emotion/Head pose: gộp tất cả (mỗi cam nhìn các HS khác nhau)
-        """
+    def _cleanup_stale_cache(self, active_face_ids):
+        """Removes data for faces that haven't been seen for a while."""
+        stale_ids = [fid for fid in self._face_analysis_cache if fid not in active_face_ids]
+        # Keep recent stale for a few seconds in case of occlusion
+        for fid in stale_ids:
+            if time.time() - self._face_analysis_cache[fid].get("last_update", 0) > 10.0:
+                del self._face_analysis_cache[fid]
+                if fid in self._active_tasks:
+                    del self._active_tasks[fid]
+
+    def _merge_camera_results(self) -> Dict[str, Any]:
+        """Merge results from all active cameras."""
         now = time.time()
         merged_emotions = []
         merged_head_poses = []
@@ -323,12 +322,10 @@ class ClassroomDetector:
         all_persons = []
         all_active_face_ids = set()
         active_cams = 0
-        person_counts = []  # per-camera person counts
+        person_counts = []
 
         for cam_id, partial in self._camera_results.items():
-            # Skip stale cameras (no frame in > 5s)
-            age = now - self._camera_timestamps.get(cam_id, 0)
-            if age > self._camera_stale_timeout:
+            if now - self._camera_timestamps.get(cam_id, 0) > self._camera_stale_timeout:
                 continue
 
             active_cams += 1
@@ -339,81 +336,55 @@ class ClassroomDetector:
 
             persons = partial.get("persons", [])
             person_counts.append(len(persons))
-            all_persons.extend(
-                {"person_id": p["person_id"], "bbox": p["bbox"],
-                 "confidence": p["confidence"], "camera_id": cam_id}
-                for p in persons
-            )
-
-        # Sĩ số = max person count across cameras (tránh đếm trùng)
-        # Nếu cam trước thấy 30, cam sau thấy 28 → sĩ số ≈ 30
-        total_persons = max(person_counts) if person_counts else 0
+            all_persons.extend(persons)
 
         return {
             "emotion_results": merged_emotions,
             "head_pose_results": merged_head_poses,
             "total_faces": total_faces,
-            "total_persons": total_persons,
+            "total_persons": max(person_counts) if person_counts else 0,
             "persons_list": all_persons,
             "all_active_face_ids": all_active_face_ids,
             "active_cameras": active_cams,
         }
 
     def start_session(self, session_id: int):
-        """
-        Start a new monitoring session.
-
-        Fix D2: Check _initialized trước khi start — auto-init nếu chưa.
-        Fix D1: attendance_tracker.start_session() có thể load embeddings
-                từ disk (I/O blocking), nhưng vì được gọi từ async context
-                qua run_in_executor (xem sessions.py), nên OK.
-        """
         if not self._initialized:
-            logger.warning("[ClassroomDetector] Not initialized — auto-initializing...")
             self.initialize()
-
         self.attendance_tracker.start_session(session_id)
         self.engagement_engine.reset()
         self.face_detector.reset_tracking()
-        logger.info(f"[ClassroomDetector] Session {session_id} started")
+        self._face_analysis_cache.clear()
+        self._active_tasks.clear()
+        logger.info(f"[ClassroomDetector] Session {session_id} started (Cache cleared)")
 
     def stop_session(self) -> Dict[str, Any]:
-        """Stop monitoring session and return summary."""
         summary = self.engagement_engine.get_session_summary()
         attendance = self.attendance_tracker.get_attendance_summary()
-
         summary.update({
             "total_students": attendance["total"],
             "present_count": attendance["present"],
             "late_count": attendance["late"],
             "absent_count": attendance["absent"],
         })
-
         self.attendance_tracker.stop_session()
-        logger.info("[ClassroomDetector] Session stopped")
         return summary
 
-    def enroll_student(
-        self, student_id: str, name: str, face_crop: np.ndarray, class_name: str = ""
-    ) -> bool:
-        """Enroll a student for attendance tracking."""
+    def enroll_student(self, student_id: str, name: str, face_crop: np.ndarray, class_name: str = "") -> bool:
         if not self._initialized:
             self.initialize()
         return self.attendance_tracker.enroll_face(student_id, name, face_crop, class_name)
 
     def get_attendance(self) -> Dict[str, Any]:
-        """Get current attendance status."""
         return self.attendance_tracker.get_attendance_summary()
 
     def get_engagement_timeline(self) -> List[Dict]:
-        """Get engagement history for charts."""
         return self.engagement_engine.get_engagement_timeline()
 
     def get_performance_stats(self) -> Dict[str, Any]:
-        """Get processing performance stats."""
         return {
             "total_frames": self._frame_count,
             "avg_process_time_ms": round(self._avg_process_time, 1),
             "tracked_faces": self.face_detector.get_track_count(),
-            "face_model": self.face_detector.model_type,
+            "active_ai_tasks": len(self._active_tasks),
         }

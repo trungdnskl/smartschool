@@ -97,8 +97,34 @@ class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
 
 
+def _override_from_env(config: AppConfig):
+    """Override config values from environment variables using APP_SECTION__FIELD pattern."""
+    for section_name in ["classroom", "detection", "engagement", "attendance", "privacy", "database", "server"]:
+        section = getattr(config, section_name)
+        # Handle dataclasses
+        if hasattr(section, "__dataclass_fields__"):
+            for field_name in section.__dataclass_fields__:
+                env_key = f"APP_{section_name.upper()}__{field_name.upper()}"
+                env_val = os.getenv(env_key)
+                if env_val is not None:
+                    # Type conversion
+                    field_type = section.__dataclass_fields__[field_name].type
+                    try:
+                        if field_type == bool:
+                            setattr(section, field_name, env_val.lower() in ("true", "1", "yes"))
+                        elif field_type == int:
+                            setattr(section, field_name, int(env_val))
+                        elif field_type == float:
+                            setattr(section, field_name, float(env_val))
+                        else:
+                            setattr(section, field_name, env_val)
+                        print(f"[Config] Environment override: {env_key}={getattr(section, field_name)}")
+                    except ValueError:
+                        print(f"[Config] Failed to convert {env_key}={env_val} to {field_type}")
+
+
 def load_config(config_path: Optional[str] = None) -> AppConfig:
-    """Load configuration from YAML file."""
+    """Load configuration from YAML file and override with environment variables."""
     if config_path is None:
         config_path = str(BASE_DIR / "config.yaml")
 
@@ -148,8 +174,12 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         if "server" in data:
             config.server = ServerConfig(**data["server"])
 
+    # Apply environment overrides
+    _override_from_env(config)
+
     # Resolve relative paths to absolute
-    config.database.path = str(PROJECT_DIR / config.database.path)
+    if not os.path.isabs(config.database.path):
+        config.database.path = str(PROJECT_DIR / config.database.path)
 
     # Ensure directories exist
     os.makedirs(os.path.dirname(config.database.path), exist_ok=True)

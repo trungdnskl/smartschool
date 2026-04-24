@@ -1,17 +1,6 @@
-"""
-api/deps.py — FastAPI shared dependencies.
-
-AUTH_ENABLED (env): set "true" để bật JWT auth trên tất cả write endpoints.
-  - false (default): backward-compatible, mọi endpoint hoạt động không cần token
-  - true: phải đăng nhập, token trả về từ POST /api/auth/login
-
-Roles:
-  - admin  : toàn quyền (thêm/xóa GV, camera, quản lý user)
-  - teacher: quản lý học sinh, session, điểm danh
-"""
 import logging
 import os
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -19,67 +8,89 @@ from jose import JWTError
 
 logger = logging.getLogger(__name__)
 
+# --- Configuration ---
+# AUTH_ENABLED: Set to "true" to enforce JWT across all protected endpoints.
 AUTH_ENABLED: bool = os.getenv("AUTH_ENABLED", "false").lower() == "true"
 
 oauth2_scheme = OAuth2PasswordBearer(
     tokenUrl="/api/auth/login",
-    auto_error=False,  # không raise 401 tự động — để deps xử lý
+    auto_error=False,
 )
 
-_ANON_ADMIN = {"sub": "anonymous", "role": "admin", "user_id": 0}
+# Anonymous user for when AUTH_ENABLED=false
+_ANON_ADMIN = {
+    "sub": "anonymous_admin",
+    "role": "admin",
+    "user_id": 0,
+    "teacher_id": None,
+    "scopes": ["admin", "teacher"]
+}
 
 
 async def get_current_user(
     token: Optional[str] = Depends(oauth2_scheme),
-) -> dict:
+) -> Dict[str, Any]:
     """
-    Decode JWT và trả về user payload.
-    Nếu AUTH_ENABLED=false: luôn trả về anonymous admin (backward compat).
+    Decodes and validates JWT token. 
+    Returns the user payload (claims).
     """
     if not AUTH_ENABLED:
         return _ANON_ADMIN
 
     if not token:
+        logger.warning("Authentication failed: No token provided")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Cần đăng nhập để thực hiện thao tác này",
+            detail="Bạn cần đăng nhập để thực hiện thao tác này",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
     try:
         from core.security import decode_token
-        return decode_token(token)
-    except JWTError:
+        payload = decode_token(token)
+        
+        # Validate payload structure
+        if not payload.get("sub"):
+            raise JWTError("Missing 'sub' claim")
+            
+        return payload
+    except JWTError as e:
+        logger.error(f"Authentication failed: Invalid token - {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token không hợp lệ hoặc đã hết hạn",
+            detail="Phiên làm việc đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+async def require_role(allowed_roles: list, user: dict):
+    """Internal helper to check roles."""
+    if user.get("role") not in allowed_roles:
+        logger.warning(f"Access denied: User '{user.get('sub')}' (role={user.get('role')}) attempted restricted action")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Tài khoản của bạn không có quyền thực hiện hành động này (Yêu cầu: {', '.join(allowed_roles)})",
+        )
+    return user
 
 
 async def require_teacher(user: dict = Depends(get_current_user)) -> dict:
-    """Require teacher or admin role."""
-    if user.get("role") not in ("teacher", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cần quyền giáo viên để thực hiện thao tác này",
-        )
-    return user
+    """Dependency: Require at least Teacher or Admin role."""
+    return await require_role(["teacher", "admin"], user)
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
-    """Require admin role."""
-    if user.get("role") != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cần quyền quản trị viên",
-        )
-    return user
+    """Dependency: Require Admin role."""
+    return await require_role(["admin"], user)
 
 
 async def optional_user(
     token: Optional[str] = Depends(oauth2_scheme),
 ) -> Optional[dict]:
-    """Return user payload if token provided, else None (for read-only endpoints)."""
+    """
+    Returns user payload if valid token is provided, otherwise returns None.
+    Useful for endpoints that show more data to logged-in users but are public.
+    """
     if not token:
         return None
     try:
