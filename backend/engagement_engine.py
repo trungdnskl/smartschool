@@ -80,6 +80,8 @@ class EngagementEngine:
         emotion_results: List[Dict],
         head_pose_results: List[Dict],
         total_faces: int,
+        total_persons: int = 0,
+        face_person_ratio: float = 1.0,
     ) -> Dict[str, Any]:
         """
         Calculate class-wide engagement metrics.
@@ -141,15 +143,19 @@ class EngagementEngine:
             self._low_engagement = avg_engagement
             self._low_time = timestamp
 
-        # Generate alerts
+        # Generate alerts (including person detection alerts)
         new_alerts = self._check_alerts(
-            avg_engagement, students, learning_state_dist, timestamp
+            avg_engagement, students, learning_state_dist, timestamp,
+            total_persons=total_persons,
+            face_person_ratio=face_person_ratio,
         )
 
         # Store history
         snapshot = {
             "timestamp": timestamp,
             "total_faces": total_faces,
+            "total_persons": total_persons,
+            "face_person_ratio": round(face_person_ratio, 2),
             "tracked_students": len(students),
             "avg_engagement": round(avg_engagement, 1),
             "avg_emotion_score": round(avg_emotion, 1),
@@ -210,10 +216,11 @@ class EngagementEngine:
 
         return self._student_states[face_id]
 
-    def _calculate_behavior_score(self, face_id: int) -> float:
+    def _calculate_behavior_score(self, face_id: int, face_person_ratio: float = 1.0) -> float:
         """
         Calculate behavior score based on engagement stability.
         Higher score = more consistent engagement over time.
+        Incorporates face_person_ratio: low ratio = some students may be turned away.
         """
         # Check history for this face_id
         recent_scores = []
@@ -233,6 +240,11 @@ class EngagementEngine:
         stability = max(0, 100 - std_score * 2)
         behavior_score = 0.5 * mean_score + 0.5 * stability
 
+        # Penalize slightly when face_person_ratio is low
+        # (indicates some people in frame aren't showing faces)
+        if face_person_ratio < 0.5:
+            behavior_score *= 0.9  # 10% penalty
+
         return min(100, max(0, behavior_score))
 
     def _check_alerts(
@@ -241,6 +253,8 @@ class EngagementEngine:
         students: List[Dict],
         learning_states: Dict,
         timestamp: str,
+        total_persons: int = 0,
+        face_person_ratio: float = 1.0,
     ) -> List[Dict]:
         """Check conditions and generate alerts (SRS FR-06)."""
         alerts = []
@@ -298,6 +312,17 @@ class EngagementEngine:
 
         # ── FR-06.5: Student sleeping > 30s ───────────
         self._check_sleep_duration(students, now, timestamp, alerts)
+
+        # ── Person Detection: Low face ratio alert ─────
+        if total_persons > 3 and face_person_ratio < 0.4:
+            if self._can_alert("low_face_ratio", now):
+                alerts.append(self._make_alert(
+                    timestamp, "low_face_ratio", "info",
+                    f"👥 Chỉ phát hiện {int(face_person_ratio*100)}% khuôn mặt so với số người ({total_persons}). "
+                    f"Một số học sinh có thể đang quay lưng.",
+                    "Kiểm tra vị trí ngồi của học sinh hoặc điều chỉnh góc camera.",
+                ))
+                self._last_alert_time["low_face_ratio"] = now
 
         # ── FR-06.6: Engagement recovered ─────────────
         if len(self._engagement_history) > 5:
@@ -438,6 +463,12 @@ class EngagementEngine:
         # Generate recommendations
         recommendations = self._generate_recommendations(scores, emotion_pct)
 
+        # Person detection aggregated stats
+        person_counts = [h.get("total_persons", 0) for h in self._engagement_history]
+        avg_persons = round(sum(person_counts) / len(person_counts), 1) if person_counts else 0
+        ratios = [h.get("face_person_ratio", 1.0) for h in self._engagement_history if h.get("face_person_ratio", 0) > 0]
+        avg_ratio = round(sum(ratios) / len(ratios), 2) if ratios else 0
+
         return {
             "avg_engagement": round(sum(scores) / len(scores), 1),
             "peak_engagement": round(self._peak_engagement, 1),
@@ -447,6 +478,8 @@ class EngagementEngine:
             "emotion_distribution": emotion_pct,
             "data_points": len(self._engagement_history),
             "recommendations": recommendations,
+            "avg_persons_detected": avg_persons,
+            "avg_face_person_ratio": avg_ratio,
         }
 
     def _generate_recommendations(

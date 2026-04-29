@@ -8,24 +8,6 @@ import numpy as np
 import logging
 import time
 import threading
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-
-from face_detector import FaceDetector
-from person_detector import PersonDetector
-from emotion_recognizer import EmotionRecognizer
-from head_pose_estimator import HeadPoseEstimator
-from attendance_tracker import AttendanceTracker
-from engagement_engine import EngagementEngine
-
-logger = logging.getLogger(__name__)
-
-
-import cv2
-import numpy as np
-import logging
-import time
-import threading
 import concurrent.futures
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -70,9 +52,11 @@ class ClassroomDetector:
         )
 
         self.person_detector = PersonDetector(
-            confidence=0.25,
-            model_size="n",
+            confidence=0.20,     # Lower threshold for overhead camera views
+            model_size="s",      # Small model — much better recall than nano
             max_persons=50,
+            kalman_enabled=True,
+            fusion_enabled=True,
         )
 
         self.emotion_recognizer = EmotionRecognizer(
@@ -186,7 +170,10 @@ class ClassroomDetector:
             # Person detection (YOLOv8)
             persons = []
             if self.person_detector._initialized:
-                persons = self.person_detector.detect(frame)
+                persons = self.person_detector.detect(frame, camera_id=camera_id)
+
+            # Update attendance tracker with person count
+            self.attendance_tracker.update_person_count(len(persons))
 
             # Face detection (MediaPipe/DNN)
             faces = self.face_detector.detect_faces(frame)
@@ -253,20 +240,38 @@ class ClassroomDetector:
 
             merged = self._merge_camera_results()
 
+            # Face-Person validation
+            face_validation = self.person_detector.validate_with_faces(
+                merged["persons_list"], merged.get("all_faces", [])
+            ) if self.person_detector._initialized else {"face_person_ratio": 1.0}
+
             # ── 4. Engagement Calculation ───────────────────
             snapshot = self.engagement_engine.calculate_engagement(
                 merged["emotion_results"],
                 merged["head_pose_results"],
                 total_faces=merged["total_faces"],
+                total_persons=merged["total_persons"],
+                face_person_ratio=face_validation.get("face_person_ratio", 1.0),
             )
 
             # Enrich snapshot
+            # Get teacher face_ids to exclude from student list
+            teacher_face_ids = self.attendance_tracker.get_teacher_face_ids()
+            attendance_data = self.attendance_tracker.get_attendance_summary()
+
             snapshot.update({
                 "camera_id": camera_id,
                 "camera_name": camera_name,
                 "total_persons": merged["total_persons"],
                 "persons": merged["persons_list"],
                 "active_cameras": merged["active_cameras"],
+                # ── Attendance / Headcount fields ──
+                "headcount": attendance_data.get("headcount", 0),
+                "identified_count": attendance_data.get("identified", 0),
+                "unidentified_count": attendance_data.get("unidentified", 0),
+                "teacher_detected": attendance_data.get("teacher_detected", False),
+                "teacher_name": attendance_data.get("teacher_name"),
+                "teacher_face_ids": list(teacher_face_ids),
             })
 
             # Cleanup stale caches
@@ -287,6 +292,7 @@ class ClassroomDetector:
             self._processing_lock.release()
 
     def _generate_empty_snapshot(self, camera_id, camera_name, persons):
+        attendance_data = self.attendance_tracker.get_attendance_summary()
         return {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "camera_id": camera_id,
@@ -301,6 +307,13 @@ class ClassroomDetector:
             "attention_distribution": {},
             "alerts": [],
             "process_time_ms": 0,
+            # ── Headcount fields (persons detected even without faces) ──
+            "headcount": attendance_data.get("headcount", len(persons)),
+            "identified_count": attendance_data.get("identified", 0),
+            "unidentified_count": attendance_data.get("unidentified", len(persons)),
+            "teacher_detected": attendance_data.get("teacher_detected", False),
+            "teacher_name": attendance_data.get("teacher_name"),
+            "teacher_face_ids": list(self.attendance_tracker.get_teacher_face_ids()),
         }
 
     def _cleanup_stale_cache(self, active_face_ids):
@@ -320,6 +333,7 @@ class ClassroomDetector:
         merged_head_poses = []
         total_faces = 0
         all_persons = []
+        all_faces = []
         all_active_face_ids = set()
         active_cams = 0
         person_counts = []
@@ -331,7 +345,9 @@ class ClassroomDetector:
             active_cams += 1
             merged_emotions.extend(partial.get("emotion_results", []))
             merged_head_poses.extend(partial.get("head_pose_results", []))
-            total_faces += len(partial.get("faces", []))
+            faces = partial.get("faces", [])
+            total_faces += len(faces)
+            all_faces.extend(faces)
             all_active_face_ids.update(partial.get("active_face_ids", set()))
 
             persons = partial.get("persons", [])
@@ -344,6 +360,7 @@ class ClassroomDetector:
             "total_faces": total_faces,
             "total_persons": max(person_counts) if person_counts else 0,
             "persons_list": all_persons,
+            "all_faces": all_faces,
             "all_active_face_ids": all_active_face_ids,
             "active_cameras": active_cams,
         }
@@ -361,13 +378,16 @@ class ClassroomDetector:
     def stop_session(self) -> Dict[str, Any]:
         summary = self.engagement_engine.get_session_summary()
         attendance = self.attendance_tracker.get_attendance_summary()
+        person_stats = self.person_detector.get_person_detection_stats() if self.person_detector._initialized else {}
         summary.update({
             "total_students": attendance["total"],
             "present_count": attendance["present"],
             "late_count": attendance["late"],
             "absent_count": attendance["absent"],
+            "person_detection_stats": person_stats,
         })
         self.attendance_tracker.stop_session()
+        self.person_detector.reset()
         return summary
 
     def enroll_student(self, student_id: str, name: str, face_crop: np.ndarray, class_name: str = "") -> bool:
@@ -382,9 +402,11 @@ class ClassroomDetector:
         return self.engagement_engine.get_engagement_timeline()
 
     def get_performance_stats(self) -> Dict[str, Any]:
+        person_stats = self.person_detector.get_person_detection_stats() if self.person_detector._initialized else {}
         return {
             "total_frames": self._frame_count,
             "avg_process_time_ms": round(self._avg_process_time, 1),
             "tracked_faces": self.face_detector.get_track_count(),
             "active_ai_tasks": len(self._active_tasks),
+            "person_detection": person_stats,
         }

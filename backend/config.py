@@ -42,6 +42,12 @@ class DetectionConfig:
     head_pose_enabled: bool = True
     frame_skip: int = 3
     max_faces: int = 40
+    # Person detection (YOLOv8)
+    person_detection_enabled: bool = True
+    person_confidence: float = 0.35
+    person_model_size: str = "n"
+    person_kalman_enabled: bool = True
+    person_fusion_enabled: bool = True
 
 
 @dataclass
@@ -76,7 +82,15 @@ class PrivacyConfig:
 
 @dataclass
 class DatabaseConfig:
-    path: str = "data/classroom.db"
+    provider: str = "sqlite"          # "sqlite" or "postgresql"
+    path: str = "data/classroom.db"   # SQLite file path
+    # PostgreSQL connection fields
+    host: str = "localhost"
+    port: int = 5432
+    database_name: str = "smartschool"
+    user: str = "postgres"
+    password: str = ""
+    pool_size: int = 10
 
 
 @dataclass
@@ -166,9 +180,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         if "privacy" in data:
             config.privacy = PrivacyConfig(**data["privacy"])
 
-        # Parse database
+        # Parse database (partial update to support both sqlite and pg fields)
         if "database" in data:
-            config.database = DatabaseConfig(**data["database"])
+            db_data = data["database"]
+            db_cfg = DatabaseConfig()
+            for field_name in db_cfg.__dataclass_fields__:
+                if field_name in db_data:
+                    setattr(db_cfg, field_name, db_data[field_name])
+            config.database = db_cfg
 
         # Parse server
         if "server" in data:
@@ -177,8 +196,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     # Apply environment overrides
     _override_from_env(config)
 
-    # Resolve relative paths to absolute
-    if not os.path.isabs(config.database.path):
+    # Resolve relative paths to absolute (SQLite only)
+    if config.database.provider == "sqlite" and not os.path.isabs(config.database.path):
         config.database.path = str(PROJECT_DIR / config.database.path)
 
     # Ensure directories exist

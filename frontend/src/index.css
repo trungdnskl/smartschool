@@ -331,7 +331,7 @@ body {
 
 /* ===== Stats Row ===== */
 .stats-row {
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   gap: 16px; margin-bottom: 20px;
 }
 
@@ -352,12 +352,26 @@ body {
 .stat-faces::before { background: linear-gradient(90deg, var(--accent-info), var(--accent-primary)); }
 .stat-present::before { background: linear-gradient(90deg, var(--accent-success), #34d399); }
 .stat-alerts::before { background: linear-gradient(90deg, var(--accent-warning), #fbbf24); }
+.stat-headcount::before { background: linear-gradient(90deg, #6366f1, var(--accent-primary)); }
+.stat-identified::before { background: linear-gradient(90deg, var(--accent-success), #34d399); }
+.stat-teacher::before { background: linear-gradient(90deg, #8b5cf6, #a78bfa); }
+.stat-teacher.teacher-active::before { background: linear-gradient(90deg, var(--accent-success), #34d399); }
+.stat-teacher.teacher-active { border-color: rgba(var(--accent-success-rgb), 0.2); }
 
 .stat-card-icon { font-size: 1.3rem; }
 .stat-card-body { display: flex; align-items: baseline; gap: 4px; }
 .stat-card-value { font-family: var(--font-mono); font-size: 2rem; font-weight: 800; color: var(--text-bright); line-height: 1; }
+.stat-card-value.stat-card-text { font-family: var(--font-primary); font-size: 1rem; font-weight: 600; }
 .stat-card-unit { font-size: 1rem; color: var(--text-secondary); font-weight: 600; }
 .stat-card-label { font-size: 0.78rem; color: var(--text-secondary); font-weight: 500; }
+.stat-card-sub { font-size: 0.72rem; color: var(--text-muted); font-weight: 500; margin-left: 4px; }
+
+@media (max-width: 900px) {
+  .stats-row { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 600px) {
+  .stats-row { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* ===== Dashboard Grid ===== */
 .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }

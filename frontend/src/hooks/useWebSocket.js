@@ -4,7 +4,11 @@ import useAppStore from '../store/appStore'
 // In dev: connect directly to backend (Vite WS proxy may conflict with HMR)
 // In prod: use relative path (behind reverse proxy)
 const WS_HOST = import.meta.env.DEV ? 'localhost:8001' : window.location.host
-const WS_URL = `ws://${WS_HOST}/ws`
+function getWsUrl() {
+  const base = `ws://${WS_HOST}/ws`
+  const token = localStorage.getItem('auth_token')
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base
+}
 
 // ── Reconnect config ────────────────────────────────────
 const RECONNECT_BASE_MS = 1000   // Start at 1s
@@ -31,7 +35,7 @@ export function useWebSocket() {
     if (!isVisible.current) return
 
     try {
-      ws.current = new WebSocket(WS_URL)
+      ws.current = new WebSocket(getWsUrl())
     } catch (e) {
       console.error('[WS] Failed to create WebSocket:', e)
       scheduleReconnect()

@@ -98,6 +98,17 @@ class AttendanceTracker:
         self._use_deep: bool = False
         self._deep_engine_name: str = "none"
 
+        # ── Teacher tracking ──────────────────────────────
+        # Teachers enrolled separately, excluded from student headcount.
+        # Key: teacher_id (e.g. "teacher_nguyen"), Value: {name, ...}
+        self._teacher_faces: Dict[str, Dict] = {}
+        self._teacher_face_ids: set = set()  # face_ids recognized as teacher
+        self._teacher_detected: bool = False
+        self._teacher_info: Optional[Dict[str, str]] = None  # {id, name}
+
+        # Headcount: from person detection (set externally each frame)
+        self._current_total_persons: int = 0
+
     def initialize(self):
         """
         Initialize face recognition — 3-tier engine cascade:
@@ -209,6 +220,10 @@ class AttendanceTracker:
         self._face_to_student.clear()
         self._recognition_history.clear()
         self._confirmed_faces.clear()  # P1-4: Reset smart cooldown
+        self._teacher_face_ids.clear()
+        self._teacher_detected = False
+        self._teacher_info = None
+        self._current_total_persons = 0
 
         # ISSUE-04 fix: Clear deep recognizer voting history to prevent
         # false positives from previous session bleeding into new one
@@ -221,8 +236,15 @@ class AttendanceTracker:
         # P0-2: Sync names between LBPH ↔ ArcFace ↔ disk before session
         self._sync_student_names()
 
-        # Initialize all LBPH-enrolled students as absent
+        # Initialize all LBPH-enrolled students as absent (skip teachers)
         for student_id, data in self._enrolled_faces.items():
+            # Skip teacher faces — they are not students
+            if data.get("is_teacher") or data.get("class_name") == "__teacher__":
+                self._teacher_faces[student_id] = {
+                    "name": data["name"],
+                    "enrolled_at": data.get("enrolled_at", ""),
+                }
+                continue
             self._attendance[student_id] = {
                 "student_id": student_id,
                 "student_name": data["name"],
@@ -272,6 +294,9 @@ class AttendanceTracker:
         self._session_start = None
         self._recognition_history.clear()
         self._confirmed_faces.clear()  # P1-4: Reset smart cooldown
+        self._teacher_face_ids.clear()
+        self._teacher_detected = False
+        self._teacher_info = None
 
         # ISSUE-04 fix: Also clear deep recognizer voting history on stop
         if self._deep_recognizer:
@@ -421,6 +446,11 @@ class AttendanceTracker:
             logger.info(f"[Attendance] ✓ ArcFace MATCH: face#{face_id} → {name} ({student_id}) sim={similarity:.3f}")
             
             self._face_to_student[face_id] = student_id
+
+            # ── Teacher check: if recognized person is a teacher, skip student logic ──
+            if self.check_if_teacher(face_id, student_id):
+                logger.info(f"[Attendance] Teacher detected: {name} (face#{face_id}) — excluded from student headcount")
+                return {"student_id": student_id, "student_name": name, "role": "teacher", "status": "teacher"}
             
             # Sync to attendance dict — student may not be in LBPH enrolled_faces
             if student_id not in self._attendance:
@@ -496,6 +526,12 @@ class AttendanceTracker:
 
             if final_id and final_score >= self.match_threshold:
                 self._face_to_student[face_id] = final_id
+
+                # ── Teacher check (LBPH path) ──
+                if self.check_if_teacher(face_id, final_id):
+                    name = self._enrolled_faces.get(final_id, {}).get("name", final_id)
+                    logger.info(f"[Attendance] Teacher detected (LBPH): {name} (face#{face_id})")
+                    return {"student_id": final_id, "student_name": name, "role": "teacher", "status": "teacher"}
 
                 if final_id in self._attendance:
                     record = self._attendance[final_id]
@@ -951,18 +987,46 @@ class AttendanceTracker:
 
     # =============== ATTENDANCE QUERIES ===============
 
+    def update_person_count(self, total_persons: int):
+        """Update current total persons detected by YOLO.
+        Called each frame by ClassroomDetector.
+        """
+        self._current_total_persons = total_persons
+
     def get_attendance_summary(self) -> Dict[str, Any]:
-        """Get current attendance summary."""
+        """Get current attendance summary.
+
+        Returns:
+            headcount: total_persons - teacher = estimated students in room
+            identified: students recognized by face
+            unidentified: headcount - identified
+            teacher_detected: whether teacher is recognized
+            teacher_name: name of recognized teacher
+        """
         present = sum(1 for a in self._attendance.values() if a["status"] == "present")
         late = sum(1 for a in self._attendance.values() if a["status"] == "late")
         absent = sum(1 for a in self._attendance.values() if a["status"] == "absent")
+        identified = present + late  # students recognized by face
+
+        # Headcount = persons detected minus teacher (if detected)
+        teacher_count = 1 if self._teacher_detected else 0
+        headcount = max(0, self._current_total_persons - teacher_count)
+        unidentified = max(0, headcount - identified)
 
         return {
             "total": len(self._attendance),
             "present": present,
             "late": late,
             "absent": absent,
+            "identified": identified,
             "records": list(self._attendance.values()),
+            # ── New headcount fields ──
+            "headcount": headcount,
+            "total_persons": self._current_total_persons,
+            "unidentified": unidentified,
+            "teacher_detected": self._teacher_detected,
+            "teacher_name": self._teacher_info["name"] if self._teacher_info else None,
+            "teacher_id": self._teacher_info["id"] if self._teacher_info else None,
         }
 
     def get_student_name(self, face_id: int) -> Optional[str]:
@@ -1039,3 +1103,90 @@ class AttendanceTracker:
                 cap.release()
 
         return None
+
+    # =============== TEACHER ENROLLMENT & RECOGNITION ===============
+
+    def enroll_teacher(
+        self,
+        teacher_id: str,
+        name: str,
+        face_crop: np.ndarray,
+    ) -> bool:
+        """Enroll a teacher's face. Uses the same engines as student enrollment
+        but stored in _teacher_faces (separate from students).
+        teacher_id should be prefixed like 'teacher_xxx' to avoid collision.
+        """
+        if not self._initialized:
+            self.initialize()
+
+        if face_crop is None or face_crop.size == 0:
+            logger.warning(f"[Attendance] Empty face crop for teacher {teacher_id}")
+            return False
+
+        try:
+            # Deep engine enrollment
+            if self._deep_recognizer:
+                try:
+                    added = self._deep_recognizer.enroll(teacher_id, name, [face_crop])
+                    if added > 0:
+                        self._use_deep = True
+                        logger.info(
+                            f"[Attendance] Teacher enrolled in deep engine: {name} ({teacher_id})"
+                        )
+                except Exception as e:
+                    logger.warning(f"[Attendance] Teacher deep enroll failed: {e}")
+
+            # LBPH enrollment
+            gray = self._preprocess_face(face_crop)
+            if gray is not None:
+                augmented = self._augment_face(gray)
+                self._enrolled_faces[teacher_id] = {
+                    "name": name,
+                    "class_name": "__teacher__",
+                    "samples": augmented,
+                    "enrolled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "is_teacher": True,
+                }
+                self._save_samples(teacher_id, name, "__teacher__")
+                self._train_recognizer()
+
+            # Save thumbnail
+            self._save_thumbnail(teacher_id, face_crop)
+
+            # Store teacher metadata
+            self._teacher_faces[teacher_id] = {
+                "name": name,
+                "enrolled_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+            logger.info(f"[Attendance] ✓ Teacher enrolled: {name} ({teacher_id})")
+            return True
+
+        except Exception as e:
+            logger.error(f"[Attendance] Teacher enrollment failed: {e}", exc_info=True)
+            return False
+
+    def is_teacher(self, person_id: str) -> bool:
+        """Check if a person_id is a teacher."""
+        if person_id in self._teacher_faces:
+            return True
+        # Also check enrolled faces with __teacher__ class
+        info = self._enrolled_faces.get(person_id, {})
+        return info.get("is_teacher", False) or info.get("class_name") == "__teacher__"
+
+    def check_if_teacher(self, face_id: int, student_id: str) -> bool:
+        """After face recognition identifies someone, check if they are a teacher.
+        If so, mark them and return True (so caller can skip student logic).
+        """
+        if self.is_teacher(student_id):
+            self._teacher_face_ids.add(face_id)
+            self._teacher_detected = True
+            name = self._teacher_faces.get(student_id, {}).get("name") or \
+                   self._enrolled_faces.get(student_id, {}).get("name", student_id)
+            self._teacher_info = {"id": student_id, "name": name}
+            return True
+        return False
+
+    def get_teacher_face_ids(self) -> set:
+        """Get set of face_ids recognized as teacher (for excluding from student analysis)."""
+        return self._teacher_face_ids

@@ -36,6 +36,19 @@ os.makedirs(_EVIDENCE_DIR, exist_ok=True)
 _latest_frames: Dict[str, np.ndarray] = {}
 
 
+def cleanup_camera_frames(camera_id: str = None) -> None:
+    """
+    Remove cached frames for a specific camera or all cameras.
+    Call when camera stops or session ends to prevent memory leaks.
+    """
+    if camera_id:
+        _latest_frames.pop(camera_id, None)
+        logger.debug(f"[Processing] Cleared frame cache for {camera_id}")
+    else:
+        _latest_frames.clear()
+        logger.debug("[Processing] Cleared all frame caches")
+
+
 def _capture_evidence(
     frame: np.ndarray,
     alert: Dict[str, Any],
@@ -296,6 +309,13 @@ async def _store_and_broadcast(snapshot: Dict[str, Any], raw_frame: Optional[np.
                 "students": students_data,
                 "process_time_ms": snapshot.get("process_time_ms", 0),
                 "session_active": session_id is not None,
+                # ── Headcount & Attendance ──
+                "headcount": snapshot.get("headcount", 0),
+                "identified_count": snapshot.get("identified_count", 0),
+                "unidentified_count": snapshot.get("unidentified_count", 0),
+                "total_persons": snapshot.get("total_persons", 0),
+                "teacher_detected": snapshot.get("teacher_detected", False),
+                "teacher_name": snapshot.get("teacher_name"),
             },
         })
     except Exception as e:

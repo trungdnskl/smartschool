@@ -16,7 +16,17 @@ from passlib.context import CryptContext
 
 # ── Config ──────────────────────────────────────────
 # SECRET_KEY phải set trong production qua env var
-SECRET_KEY: str = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
+_env_secret = os.getenv("SECRET_KEY", "")
+if _env_secret:
+    SECRET_KEY: str = _env_secret
+else:
+    import warnings
+    SECRET_KEY: str = secrets.token_urlsafe(32)
+    warnings.warn(
+        "[Security] SECRET_KEY not set! Using random key — all JWT tokens will be "
+        "invalidated on restart. Set SECRET_KEY env var in production.",
+        stacklevel=2,
+    )
 ALGORITHM: str = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("TOKEN_EXPIRE_MINUTES", "480"))  # 8h
 
@@ -29,12 +39,12 @@ DEFAULT_ADMIN_PASSWORD = "changeme123"
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Verify plain-text password against bcrypt hash."""
+    """Verify plain-text password against sha256_crypt hash."""
     return pwd_context.verify(plain, hashed)
 
 
 def hash_password(password: str) -> str:
-    """Hash password with bcrypt."""
+    """Hash password with sha256_crypt."""
     return pwd_context.hash(password)
 
 

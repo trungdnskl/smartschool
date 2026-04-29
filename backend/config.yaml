@@ -98,6 +98,12 @@ detection:
   head_pose_enabled: true
   frame_skip: 3                  # process every Nth frame (tăng = nhẹ hơn)
   max_faces: 40                  # max faces to track
+  # Person detection (YOLOv8)
+  person_detection_enabled: true
+  person_confidence: 0.20          # Lower for overhead/angled cameras
+  person_model_size: "s"           # s=small (better accuracy for classroom)
+  person_kalman_enabled: true    # Kalman filter for smooth tracking
+  person_fusion_enabled: true    # Cross-camera person fusion
 
 engagement:
   weights:
@@ -123,7 +129,16 @@ privacy:
   encrypt_embeddings: true
 
 database:
-  path: "data/classroom.db"
+  provider: "sqlite"             # "sqlite" (dev) or "postgresql" (production)
+  path: "data/classroom.db"      # SQLite file path
+  # PostgreSQL (uncomment for production):
+  # provider: "postgresql"
+  # host: "localhost"
+  # port: 5432
+  # database_name: "smartschool"
+  # user: "postgres"
+  # password: "your_password"
+  # pool_size: 10
 
 server:
   host: "0.0.0.0"

@@ -96,68 +96,71 @@ async def stop_session(_: dict = Depends(require_teacher)):
         get_engagement_timeline, get_alerts, save_session_summary,
     )
 
-    if state.active_session_id is None:
-        raise HTTPException(400, "Không có buổi học nào đang diễn ra.")
+    async with state.session_lock:
+        if state.active_session_id is None:
+            raise HTTPException(400, "Không có buổi học nào đang diễn ra.")
 
-    session_id = state.active_session_id
+        session_id = state.active_session_id
 
-    # Stop cameras + AI
-    if state.camera_manager:
-        state.camera_manager.stop_all()
+        # Stop cameras + AI + cleanup frame cache (I4: prevent memory leak)
+        if state.camera_manager:
+            state.camera_manager.stop_all()
+        from processing import cleanup_camera_frames
+        cleanup_camera_frames()  # Clear all cached frames
 
-    summary: dict = {}
-    if state.detector:
-        summary = state.detector.stop_session() or {}
-    summary["session_id"] = session_id
+        summary: dict = {}
+        if state.detector:
+            summary = state.detector.stop_session() or {}
+        summary["session_id"] = session_id
 
-    # Attendance counts
-    attendance = await get_attendance(session_id)
-    summary["present_count"] = sum(1 for a in attendance if a.get("status") == "present")
-    summary["late_count"]    = sum(1 for a in attendance if a.get("status") == "late")
-    summary["absent_count"]  = sum(1 for a in attendance if a.get("status") == "absent")
-    summary["total_students"] = len(attendance)
+        # Attendance counts
+        attendance = await get_attendance(session_id)
+        summary["present_count"] = sum(1 for a in attendance if a.get("status") == "present")
+        summary["late_count"]    = sum(1 for a in attendance if a.get("status") == "late")
+        summary["absent_count"]  = sum(1 for a in attendance if a.get("status") == "absent")
+        summary["total_students"] = len(attendance)
 
-    # Actual duration from DB start_time
-    session_info = await get_session_by_id(session_id)
-    if session_info and session_info.get("start_time"):
-        try:
-            start_dt = datetime.strptime(session_info["start_time"], "%Y-%m-%d %H:%M:%S")
-            summary["duration_minutes"] = round(
-                (datetime.now() - start_dt).total_seconds() / 60, 1
-            )
-        except ValueError:
+        # Actual duration from DB start_time
+        session_info = await get_session_by_id(session_id)
+        if session_info and session_info.get("start_time"):
+            try:
+                start_dt = datetime.strptime(session_info["start_time"], "%Y-%m-%d %H:%M:%S")
+                summary["duration_minutes"] = round(
+                    (datetime.now() - start_dt).total_seconds() / 60, 1
+                )
+            except ValueError:
+                summary["duration_minutes"] = 0.0
+        else:
             summary["duration_minutes"] = 0.0
-    else:
-        summary["duration_minutes"] = 0.0
 
-    # Engagement timeline
-    engagement_data = await get_engagement_timeline(session_id)
-    if engagement_data:
-        summary["engagement_timeline"] = [
-            {"timestamp": e["timestamp"], "avg_engagement": e["avg_engagement"]}
-            for e in engagement_data
-        ]
+        # Engagement timeline
+        engagement_data = await get_engagement_timeline(session_id)
+        if engagement_data:
+            summary["engagement_timeline"] = [
+                {"timestamp": e["timestamp"], "avg_engagement": e["avg_engagement"]}
+                for e in engagement_data
+            ]
 
-    # Alerts count
-    alerts = await get_alerts(session_id)
-    summary["alerts_count"] = len(alerts)
+        # Alerts count
+        alerts = await get_alerts(session_id)
+        summary["alerts_count"] = len(alerts)
 
-    # Recommendations
-    avg_eng = summary.get("avg_engagement", 0)
-    if avg_eng < 40:
-        recs = ["⚠️ Mức độ tập trung thấp — thay đổi phương pháp giảng dạy"]
-    elif avg_eng < 60:
-        recs = ["📌 Engagement trung bình — nên tăng tương tác với học sinh"]
-    else:
-        recs = ["✅ Lớp học tích cực — tiếp tục duy trì phương pháp hiện tại"]
-    summary["recommendations"] = recs
+        # Recommendations
+        avg_eng = summary.get("avg_engagement", 0)
+        if avg_eng < 40:
+            recs = ["⚠️ Mức độ tập trung thấp — thay đổi phương pháp giảng dạy"]
+        elif avg_eng < 60:
+            recs = ["📌 Engagement trung bình — nên tăng tương tác với học sinh"]
+        else:
+            recs = ["✅ Lớp học tích cực — tiếp tục duy trì phương pháp hiện tại"]
+        summary["recommendations"] = recs
 
-    # Persist
-    await save_session_summary(summary)
-    await end_session(session_id)
+        # Persist
+        await save_session_summary(summary)
+        await end_session(session_id)
 
-    state.active_session_id = None
-    state.latest_snapshot = None
+        state.active_session_id = None
+        state.latest_snapshot = None
 
     await state.broadcast({
         "type": "session_status",
@@ -173,9 +176,10 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
 ):
-    from database import get_sessions
+    from database import get_sessions, get_sessions_count
     sessions = await get_sessions(limit=limit, offset=offset)
-    return {"sessions": sessions, "total": len(sessions), "limit": limit, "offset": offset}
+    total = await get_sessions_count()
+    return {"sessions": sessions, "total": total, "limit": limit, "offset": offset}
 
 
 @router.get("/active", summary="Buổi học đang hoạt động")
@@ -314,7 +318,7 @@ async def get_session_report(session_id: int):
     return report
 
 
-@router.get("/{session_id}/export", summary="Xuất CSV bưại học")
+@router.get("/{session_id}/export", summary="Xuất CSV buổi học")
 async def export_session(
     session_id: int,
     format: str = Query("csv", pattern="^(csv|json)$"),

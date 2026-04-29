@@ -46,6 +46,7 @@ from processing import on_frame_detected
 # ── Config & infrastructure ───────────────────────────
 from config import get_config
 from database import init_db, get_dashboard_stats, recover_stuck_sessions, cleanup_expired_data
+from db_provider import init_database, get_db_manager
 from camera_manager import CameraManager
 from classroom_detector import ClassroomDetector
 
@@ -82,6 +83,13 @@ async def lifespan(app: FastAPI):
 
     # Database (creates tables + default admin user if needed)
     await init_db()
+
+    # Initialize database abstraction layer (supports SQLite + PostgreSQL)
+    try:
+        await init_database(cfg)
+        logger.info(f"[Main] DB Provider: {get_db_manager().provider_name}")
+    except Exception as e:
+        logger.warning(f"[Main] DB Provider init skipped: {e} (using direct SQLite)")
 
     # Fix DB2: Recover sessions stuck as is_active=1 from previous crash
     recovered = await recover_stuck_sessions()
@@ -211,6 +219,20 @@ app.include_router(system_router)
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     """Real-time engagement updates + heartbeat."""
+    # ── Auth check (I6: protect WS when AUTH_ENABLED=true) ──
+    from api.deps import AUTH_ENABLED
+    if AUTH_ENABLED:
+        token = ws.query_params.get("token")
+        if not token:
+            await ws.close(code=1008, reason="Authentication required")
+            return
+        try:
+            from core.security import decode_token
+            decode_token(token)  # validates exp + signature
+        except Exception:
+            await ws.close(code=1008, reason="Invalid or expired token")
+            return
+
     await ws.accept()
 
     # Thread-safe add with lock

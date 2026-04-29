@@ -267,6 +267,73 @@ async def manual_attendance(
     return {"status": "ok", "message": f"Đã điểm danh {student_id}: {status}"}
 
 
+# ── Teacher enrollment ────────────────────────────────
+
+@router.post("/api/teacher/enroll", summary="Đăng ký khuôn mặt giáo viên")
+async def enroll_teacher_face(
+    teacher_id: str = Form(...),
+    teacher_name: str = Form(...),
+    image: str = Form(None),  # base64 image (optional, if not using camera)
+    _: dict = Depends(require_teacher),
+):
+    """Đăng ký khuôn mặt giáo viên để loại trừ khỏi sĩ số học sinh."""
+    import base64
+    import cv2
+    import numpy as np
+
+    if not state.detector:
+        raise HTTPException(500, "Hệ thống chưa khởi tạo")
+
+    # Prefix teacher_id to avoid collision with student IDs
+    tid = teacher_id if teacher_id.startswith("teacher_") else f"teacher_{teacher_id}"
+
+    if image:
+        try:
+            img_bytes = base64.b64decode(image)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            face_crop = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            raise HTTPException(400, f"Lỗi giải mã ảnh: {e}")
+    else:
+        # Capture from camera
+        from config import get_config
+        cfg = get_config()
+        camera_url = cfg.cameras[0].url if cfg.cameras else "0"
+        face_crop = state.detector.attendance_tracker.capture_frame_from_camera(camera_url)
+
+    if face_crop is None:
+        raise HTTPException(400, "Không thể lấy ảnh khuôn mặt")
+
+    # Detect face in image
+    faces = state.detector.face_detector.detect_faces(face_crop)
+    if not faces:
+        raise HTTPException(400, "Không phát hiện khuôn mặt trong ảnh")
+
+    bbox = faces[0]["bbox"]
+    cropped = state.detector.face_detector.crop_face(face_crop, bbox, margin=0.2)
+    if cropped is None:
+        raise HTTPException(400, "Không thể crop khuôn mặt")
+
+    success = state.detector.attendance_tracker.enroll_teacher(tid, teacher_name, cropped)
+    if success:
+        return {"status": "ok", "teacher_id": tid, "teacher_name": teacher_name}
+    raise HTTPException(500, "Đăng ký khuôn mặt GV thất bại")
+
+
+@router.get("/api/teacher/status", summary="Trạng thái phát hiện giáo viên")
+async def get_teacher_status():
+    """Kiểm tra giáo viên có đang được phát hiện trong lớp không."""
+    if not state.detector:
+        return {"teacher_detected": False, "teacher_name": None}
+
+    att = state.detector.get_attendance()
+    return {
+        "teacher_detected": att.get("teacher_detected", False),
+        "teacher_name": att.get("teacher_name"),
+        "teacher_id": att.get("teacher_id"),
+    }
+
+
 # ── Alerts management ───────────────────────────────
 
 @router.post("/api/alerts/{alert_id}/read", summary="Đánh dấu cảnh báo đã đọc")
